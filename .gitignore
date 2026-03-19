@@ -1,0 +1,30 @@
+## Rust / Cargo
+/target/
+**/*.rs.bk
+*.pdb
+
+## rust-analyzer
+rust-project.json
+
+## IDEs / editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+## macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+## Logs / misc
+*.log
+
+## Environment / secrets (keep examples committed separately)
+.env
+.env.*
+!.env.example
+!.env.sample
+
