@@ -13,7 +13,7 @@ permissions:
 
 env:
   BIN_NAME: cxp
-  PKG_NAME: contextpool
+  PKG_NAME: cxp
 
 jobs:
   build:
@@ -108,8 +108,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            contextpool-*.tar.gz
-            contextpool-*.zip
+            cxp-*.tar.gz
+            cxp-*.zip
 
       - name: Upload release assets (release event)
         if: github.event_name == 'release'
@@ -117,8 +117,8 @@ jobs:
         with:
           tag_name: ${{ github.event.release.tag_name }}
           files: |
-            contextpool-*.tar.gz
-            contextpool-*.zip
+            cxp-*.tar.gz
+            cxp-*.zip
 
   checksums:
     name: checksums
@@ -152,7 +152,7 @@ jobs:
           set -euo pipefail
           cd artifacts
           # Only hash our archives (avoid hashing checksums file itself if re-run)
-          ls -1 contextpool-*.tar.gz contextpool-*.zip 2>/dev/null | xargs -I{} sh -c 'sha256sum "{}"' > checksums.txt
+          ls -1 cxp-*.tar.gz cxp-*.zip 2>/dev/null | xargs -I{} sh -c 'sha256sum "{}"' > checksums.txt
           cat checksums.txt
 
       - name: Upload checksums (tag push)
