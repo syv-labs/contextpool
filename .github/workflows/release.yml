@@ -1,0 +1,170 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  release:
+    types: [published]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+env:
+  BIN_NAME: cxp
+  PKG_NAME: contextpool
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            ext: ""
+            archive: tar.gz
+          - os: macos-14
+            target: x86_64-apple-darwin
+            ext: ""
+            archive: tar.gz
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+            ext: ""
+            archive: tar.gz
+          - os: ubuntu-22.04
+            target: aarch64-unknown-linux-musl
+            ext: ""
+            archive: tar.gz
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            ext: ".exe"
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools (linux-musl)
+        if: startsWith(matrix.target, 'x86_64-unknown-linux-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      # For aarch64 musl, use cross to keep setup reliable.
+      - name: Install cross (linux aarch64-musl)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build (cargo)
+        if: matrix.target != 'aarch64-unknown-linux-musl'
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build (cross)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Package (tar.gz) [non-Windows]
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          src="target/${{ matrix.target }}/release/${BIN_NAME}${{ matrix.ext }}"
+          if [ ! -f "$src" ]; then
+            echo "Expected binary not found: $src" >&2
+            ls -la "target/${{ matrix.target }}/release" || true
+            exit 1
+          fi
+          cp "$src" "dist/${BIN_NAME}${{ matrix.ext }}"
+          chmod +x "dist/${BIN_NAME}${{ matrix.ext }}" || true
+          asset="${PKG_NAME}-v${version}-${{ matrix.target }}"
+          tar -C dist -czf "${asset}.tar.gz" "${BIN_NAME}${{ matrix.ext }}"
+
+      - name: Package (zip) [Windows]
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = "${env:GITHUB_REF_NAME}".TrimStart("v")
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          $src = "target/${{ matrix.target }}/release/${env:BIN_NAME}${{ matrix.ext }}"
+          if (!(Test-Path $src)) {
+            Write-Error "Expected binary not found: $src"
+          }
+          Copy-Item $src "dist/${env:BIN_NAME}${{ matrix.ext }}" -Force
+          $asset = "${env:PKG_NAME}-v$version-${{ matrix.target }}"
+          $zipPath = "$asset.zip"
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          Compress-Archive -Path "dist/${env:BIN_NAME}${{ matrix.ext }}" -DestinationPath $zipPath -Force
+
+      - name: Upload release assets (tag push)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            contextpool-*.tar.gz
+            contextpool-*.zip
+
+      - name: Upload release assets (release event)
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          files: |
+            contextpool-*.tar.gz
+            contextpool-*.zip
+
+  checksums:
+    name: checksums
+    runs-on: ubuntu-22.04
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download release assets (tag push)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          mkdir -p artifacts
+          gh release download "$tag" --dir artifacts
+
+      - name: Download release assets (release event)
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.release.tag_name }}"
+          mkdir -p artifacts
+          gh release download "$tag" --dir artifacts
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          cd artifacts
+          # Only hash our archives (avoid hashing checksums file itself if re-run)
+          ls -1 contextpool-*.tar.gz contextpool-*.zip 2>/dev/null | xargs -I{} sh -c 'sha256sum "{}"' > checksums.txt
+          cat checksums.txt
+
+      - name: Upload checksums (tag push)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/checksums.txt
+
+      - name: Upload checksums (release event)
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          files: artifacts/checksums.txt
+
