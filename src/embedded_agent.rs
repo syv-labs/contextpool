@@ -1,0 +1,446 @@
+use anyhow::{Context, Result};
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+
+const NVIDIA_BASE_URL: &str = "https://integrate.api.nvidia.com/v1";
+
+// Mirrors `context-generator-agent/main.py` intent.
+const SYSTEM_PROMPT: &str = r#"
+You are a senior software engineer extracting high-signal engineering memory from developer chats.
+
+Your task is NOT to summarize the conversation.
+Your task is to DISTILL reusable engineering insights, like writing precise commit notes.
+
+CORE PRINCIPLE:
+- Think like a senior engineer documenting decisions, bugs, and fixes for future developers.
+
+PROCESS (perform internally, do not output steps):
+1. Identify:
+   - bugs encountered
+   - root causes
+   - fixes or solutions
+   - design decisions
+   - non-obvious patterns or gotchas
+
+2. Filter:
+   - REMOVE generic explanations
+   - REMOVE repeated ideas
+   - REMOVE vague or incomplete thoughts
+   - KEEP only actionable, specific insights tied to code or decisions
+
+3. Prioritize:
+   - bugs that caused failures
+   - root causes and fixes
+   - architectural or design decisions
+   - non-obvious insights
+
+4. Deprioritize:
+   - basic programming explanations
+   - obvious fixes
+   - exploratory discussion
+   - conversational fluff
+
+5. Compress:
+   - Each insight MUST be <= 200 characters
+
+OUTPUT REQUIREMENTS:
+- Max 5 objects
+- If no strong insights exist, return []
+- Output must be a JSON ARRAY (list). Not an object/dict.
+- Do not wrap the JSON in Markdown fences (no ```).
+- Each object must match this schema exactly: {type, title, summary, tags, file?}
+- Allowed keys per object: type, title, summary, tags, file. No other keys.
+- If you are about to output anything other than a JSON array of objects with the allowed keys, output [] instead.
+
+EXAMPLE (shape only; content will differ):
+[
+  {
+    "type": "bug",
+    "title": "Fix ESM vs CJS mismatch",
+    "summary": "Add \"type\": \"module\" with NodeNext to resolve verbatimModuleSyntax import/export errors.",
+    "tags": ["typescript", "esm", "tsconfig"],
+    "file": "client.ts"
+  }
+]
+"#;
+
+fn user_prompt(chat_text: &str, files: &[String], repo_type: &str) -> String {
+    let files_joined = if files.is_empty() {
+        "".to_string()
+    } else {
+        files.join(", ")
+    };
+    format!(
+        r#"
+CHAT TRANSCRIPT:
+{chat_text}
+
+FILES:
+{files}
+
+REPO TYPE:
+{repo_type}
+
+Return STRICT JSON only.
+"#,
+        chat_text = chat_text,
+        files = files_joined,
+        repo_type = repo_type
+    )
+}
+
+#[derive(Debug, Clone)]
+pub struct EmbeddedAgentOptions {
+    pub api_key: String,
+    pub model: String,
+    pub repair_model: String,
+    pub temperature: f32,
+    pub top_p: f32,
+    pub max_completion_tokens: u32,
+    pub sanitize_chat: bool,
+    pub extract_user_queries_only: bool,
+    pub debug_raw_output: bool,
+}
+
+impl EmbeddedAgentOptions {
+    pub fn from_env(api_key: String) -> Self {
+        let model = std::env::var("MODEL").unwrap_or_else(|_| "qwen/qwen3.5-122b-a10b".to_string());
+        let repair_model = std::env::var("REPAIR_MODEL").unwrap_or_else(|_| model.clone());
+        let temperature = std::env::var("TEMPERATURE")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(0.0);
+        let top_p = std::env::var("TOP_P")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(0.95);
+        let max_completion_tokens = std::env::var("MAX_COMPLETION_TOKENS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(4096);
+
+        let sanitize_chat = std::env::var("SANITIZE_CHAT")
+            .unwrap_or_else(|_| "1".to_string())
+            .to_lowercase();
+        let sanitize_chat = matches!(sanitize_chat.as_str(), "1" | "true" | "yes" | "on");
+
+        let extract_user_queries_only = std::env::var("EXTRACT_USER_QUERIES_ONLY")
+            .unwrap_or_else(|_| "0".to_string())
+            .to_lowercase();
+        let extract_user_queries_only =
+            matches!(extract_user_queries_only.as_str(), "1" | "true" | "yes" | "on");
+
+        let debug_raw_output = std::env::var("DEBUG_LLM_OUTPUT")
+            .unwrap_or_default()
+            .to_lowercase();
+        let debug_raw_output = matches!(debug_raw_output.as_str(), "1" | "true" | "yes" | "on");
+
+        Self {
+            api_key,
+            model,
+            repair_model,
+            temperature,
+            top_p,
+            max_completion_tokens,
+            sanitize_chat,
+            extract_user_queries_only,
+            debug_raw_output,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct ChatCompletionRequest<'a> {
+    model: &'a str,
+    messages: Vec<Message<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f32>,
+    #[serde(rename = "max_tokens", skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    stream: bool,
+}
+
+#[derive(Serialize)]
+struct Message<'a> {
+    role: &'a str,
+    content: &'a str,
+}
+
+#[derive(Deserialize)]
+struct ChatCompletionResponse {
+    choices: Vec<Choice>,
+}
+
+#[derive(Deserialize)]
+struct Choice {
+    message: ChoiceMessage,
+}
+
+#[derive(Deserialize)]
+struct ChoiceMessage {
+    content: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ContextItem {
+    #[serde(default, rename = "type")]
+    pub r#type: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub file: Option<String>,
+}
+
+pub fn sanitize_chat_text(text: &str, extract_user_queries_only: bool) -> String {
+    let mut t = text.to_string();
+
+    if extract_user_queries_only && t.to_lowercase().contains("<user_query>") {
+        let re = Regex::new(r"(?is)<user_query>\s*([\s\S]*?)\s*</user_query>").unwrap();
+        let mut queries: Vec<String> = Vec::new();
+        for cap in re.captures_iter(&t) {
+            if let Some(m) = cap.get(1) {
+                let q = m.as_str().trim();
+                if !q.is_empty() {
+                    queries.push(q.to_string());
+                }
+            }
+        }
+        if !queries.is_empty() {
+            t = queries.join("\n\n");
+        }
+    }
+
+    // Drop <think> blocks
+    t = Regex::new(r"(?is)<think>[\s\S]*?</think>")
+        .unwrap()
+        .replace_all(&t, "")
+        .to_string();
+
+    // Drop common XML-ish blocks
+    for pat in [
+        r"(?is)<attached_files>[\s\S]*?</attached_files>",
+        r"(?is)<code_selection[\s\S]*?</code_selection>",
+        r"(?is)<terminal_selection[\s\S]*?</terminal_selection>",
+    ] {
+        t = Regex::new(pat).unwrap().replace_all(&t, "").to_string();
+    }
+
+    // Remove tool call/result lines
+    t = Regex::new(r"(?m)^\[Tool call\].*$")
+        .unwrap()
+        .replace_all(&t, "")
+        .to_string();
+    t = Regex::new(r"(?m)^\[Tool result\].*$")
+        .unwrap()
+        .replace_all(&t, "")
+        .to_string();
+
+    // Remove patch blobs
+    t = Regex::new(r"(?is)\*\*\* Begin Patch[\s\S]*?\*\*\* End Patch")
+        .unwrap()
+        .replace_all(&t, "")
+        .to_string();
+
+    // Remove markdown fences but keep contents
+    t = Regex::new(r"(?is)```(?:json|python|typescript|javascript|bash|sh|text)?\n")
+        .unwrap()
+        .replace_all(&t, "")
+        .to_string();
+    t = t.replace("```", "");
+
+    // Collapse excessive blank lines
+    t = Regex::new(r"\n{3,}").unwrap().replace_all(&t, "\n\n").to_string();
+
+    t.trim().to_string()
+}
+
+fn extract_first_json_candidate(text: &str) -> Option<String> {
+    let cleaned = text.trim();
+    let start_arr = cleaned.find('[');
+    let end_arr = cleaned.rfind(']');
+    if let (Some(s), Some(e)) = (start_arr, end_arr) {
+        if e > s {
+            return Some(cleaned[s..=e].to_string());
+        }
+    }
+    let start_obj = cleaned.find('{');
+    let end_obj = cleaned.rfind('}');
+    if let (Some(s), Some(e)) = (start_obj, end_obj) {
+        if e > s {
+            return Some(cleaned[s..=e].to_string());
+        }
+    }
+    None
+}
+
+fn parse_context_items(raw_text: &str) -> Vec<ContextItem> {
+    let candidate = extract_first_json_candidate(raw_text).unwrap_or_else(|| raw_text.trim().to_string());
+    let data: serde_json::Value = match serde_json::from_str(&candidate) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+
+    let arr_value = match data {
+        serde_json::Value::Array(a) => serde_json::Value::Array(a),
+        serde_json::Value::Object(map) => {
+            // Common model failure: object keyed by filename/type → coerce values to list.
+            serde_json::Value::Array(map.into_values().collect())
+        }
+        _ => serde_json::Value::Array(vec![]),
+    };
+
+    serde_json::from_value::<Vec<ContextItem>>(arr_value).unwrap_or_default()
+}
+
+async fn call_nvidia_chat(
+    client: &reqwest::Client,
+    api_key: &str,
+    model: &str,
+    system: &str,
+    user: &str,
+    temperature: f32,
+    top_p: f32,
+    max_tokens: u32,
+) -> Result<String> {
+    let url = format!("{}/chat/completions", NVIDIA_BASE_URL.trim_end_matches('/'));
+    let req_body = ChatCompletionRequest {
+        model,
+        messages: vec![
+            Message {
+                role: "system",
+                content: system,
+            },
+            Message {
+                role: "user",
+                content: user,
+            },
+        ],
+        temperature: Some(temperature),
+        top_p: Some(top_p),
+        max_tokens: Some(max_tokens),
+        stream: false,
+    };
+
+    let resp = client
+        .post(url)
+        .bearer_auth(api_key)
+        .json(&req_body)
+        .send()
+        .await
+        .context("NVIDIA chat completion request failed")?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let t = resp.text().await.unwrap_or_default();
+        anyhow::bail!("NVIDIA API returned {}: {}", status, t);
+    }
+
+    let parsed = resp
+        .json::<ChatCompletionResponse>()
+        .await
+        .context("Invalid NVIDIA chat completion JSON")?;
+
+    let content = parsed
+        .choices
+        .get(0)
+        .and_then(|c| c.message.content.clone())
+        .unwrap_or_default();
+
+    Ok(content)
+}
+
+pub async fn generate_context_items(
+    chat_text: &str,
+    files: &[String],
+    repo_type: &str,
+    opts: &EmbeddedAgentOptions,
+) -> Result<(Vec<ContextItem>, Option<String>)> {
+    let mut chat = chat_text.to_string();
+    if opts.sanitize_chat {
+        chat = sanitize_chat_text(&chat, opts.extract_user_queries_only);
+    }
+
+    let client = reqwest::Client::new();
+    let user = user_prompt(&chat, files, repo_type);
+
+    let raw = call_nvidia_chat(
+        &client,
+        &opts.api_key,
+        &opts.model,
+        SYSTEM_PROMPT,
+        &user,
+        opts.temperature,
+        opts.top_p,
+        opts.max_completion_tokens,
+    )
+    .await?;
+
+    let mut items = parse_context_items(&raw);
+
+    // Repair pass: if model returned *something* but not parseable into our schema.
+    if items.is_empty() && raw.trim() != "" && raw.trim() != "[]" {
+        let repair_system = "You are a strict JSON converter. Convert the input into the required JSON array only.";
+        let repair_user = format!(
+            r#"
+You MUST output a JSON ARRAY (list) of 0-5 objects.
+Each object keys: type, title, summary, tags, file (optional).
+No other keys. No markdown fences. Strict JSON only.
+
+If the input is not about engineering insights, output [].
+
+CHAT (sanitized):
+{chat}
+
+MODEL OUTPUT TO CONVERT:
+{raw}
+"#,
+            chat = chat,
+            raw = raw
+        );
+
+        let repaired_raw = call_nvidia_chat(
+            &client,
+            &opts.api_key,
+            &opts.repair_model,
+            repair_system,
+            &repair_user,
+            0.0,
+            0.95,
+            opts.max_completion_tokens,
+        )
+        .await
+        .unwrap_or_default();
+
+        if !repaired_raw.trim().is_empty() {
+            items = parse_context_items(&repaired_raw);
+        }
+    }
+
+    // Deduplicate by summary (case-insensitive), mirroring Python behavior.
+    let mut seen = std::collections::HashSet::<String>::new();
+    items.retain(|it| {
+        let key = it.summary.to_lowercase();
+        if key.trim().is_empty() {
+            false
+        } else if seen.contains(&key) {
+            false
+        } else {
+            seen.insert(key);
+            true
+        }
+    });
+
+    if items.len() > 5 {
+        items.truncate(5);
+    }
+
+    let debug = if opts.debug_raw_output { Some(raw) } else { None };
+    Ok((items, debug))
+}
+

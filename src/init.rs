@@ -38,17 +38,11 @@ pub async fn init_cursor(args: InitCursorArgs) -> Result<()> {
     let run_dir = proj_dir.join("imports").join("cursor");
     fs::create_dir_all(&run_dir)?;
 
-    let api_base = args
-        .api_base
-        .or_else(|| std::env::var("CONTEXT_POOL_API_BASE").ok())
-        .unwrap_or_else(|| "http://0.0.0.0:8000".to_string());
-
     let imported = export_cursor_project_chats(
         &cursor_dir,
         &project_id,
         &args.chat_ids,
         &run_dir,
-        &api_base,
     )
     .await?;
 

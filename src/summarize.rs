@@ -1,5 +1,6 @@
-use anyhow::{Context, Result};
-use serde::Deserialize;
+use anyhow::Result;
+
+use crate::{credentials::ensure_nvidia_api_key_interactive, embedded_agent};
 
 fn redact_secrets(text: &str) -> String {
     // Keep this intentionally simple and conservative: prefer false-positives over leaking secrets.
@@ -59,55 +60,13 @@ pub fn fallback_summary(text: &str) -> String {
     )
 }
 
-#[derive(Deserialize)]
-struct ContextItem {
-    #[serde(default)]
-    r#type: String,
-    #[serde(default)]
-    title: String,
-    #[serde(default)]
-    summary: String,
-    #[serde(default)]
-    tags: Vec<String>,
-    #[serde(default)]
-    file: Option<String>,
-}
-
-pub async fn summarize_via_api(text: &str, api_base: Option<&str>, api_key: Option<&str>) -> Result<String> {
-    let api_base = api_base.context("Missing API base URL (set --api-base or CONTEXT_POOL_API_BASE)")?;
-
-    // We summarize via the local context-generator-agent:
-    // POST <api_base>/generate-context
-    // Body: { chat: "<raw transcript text>", files: [], repo_type: "" }
-    // Response: JSON array of 0-5 context items.
-    let url = format!("{}/generate-context", api_base.trim_end_matches('/'));
-    let client = reqwest::Client::new();
+pub async fn summarize_embedded(text: &str) -> Result<String> {
+    let api_key = ensure_nvidia_api_key_interactive()?;
 
     let redacted = redact_secrets(text);
-    let body = serde_json::json!({
-        "chat": redacted,
-        "files": [],
-        "repo_type": "",
-    });
-
-    let mut req = client.post(url).json(&body);
-    if let Some(k) = api_key {
-        if !k.trim().is_empty() {
-            req = req.bearer_auth(k);
-        }
-    }
-    let resp = req.send().await.context("API request failed")?;
-
-    let status = resp.status();
-    if !status.is_success() {
-        let t = resp.text().await.unwrap_or_default();
-        anyhow::bail!("API returned {}: {}", status, t);
-    }
-
-    let items = resp
-        .json::<Vec<ContextItem>>()
-        .await
-        .context("Invalid API response JSON")?;
+    let opts = embedded_agent::EmbeddedAgentOptions::from_env(api_key);
+    let (items, debug_raw) =
+        embedded_agent::generate_context_items(&redacted, &[], "", &opts).await?;
 
     if items.is_empty() {
         return Ok("No high-signal engineering insights extracted.".to_string());
@@ -152,6 +111,13 @@ pub async fn summarize_via_api(text: &str, api_base: Option<&str>, api_key: Opti
             }
         }
     }
+
+    if let Some(raw) = debug_raw {
+        out.push_str("\n\n---\n\n## Debug (raw model output)\n\n");
+        out.push_str(raw.trim());
+        out.push('\n');
+    }
+
     Ok(out.trim().to_string())
 }
 

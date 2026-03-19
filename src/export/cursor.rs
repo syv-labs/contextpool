@@ -1,7 +1,7 @@
 use crate::{
     cli::ExportCursorArgs,
     paths::{default_cursor_dir, default_out_dir},
-    summarize::{fallback_summary, summarize_via_api},
+    summarize::{fallback_summary, summarize_embedded},
     transcript::extract_text_from_jsonl,
 };
 use anyhow::{Context, Result};
@@ -26,11 +26,6 @@ pub async fn export_cursor(args: ExportCursorArgs) -> Result<()> {
     let run_dir = out_dir.join("exports").join(run_id.replace(':', "-"));
     fs::create_dir_all(&run_dir).with_context(|| format!("Creating {}", run_dir.display()))?;
 
-    let api_base = args
-        .api_base
-        .or_else(|| std::env::var("CONTEXT_POOL_API_BASE").ok());
-    let api_key: Option<String> = None;
-
     let transcript_paths = if let Some(single) = args.transcript.clone() {
         vec![single]
     } else {
@@ -45,7 +40,7 @@ pub async fn export_cursor(args: ExportCursorArgs) -> Result<()> {
         let summary = if args.offline {
             fallback_summary(&extracted)
         } else {
-            summarize_via_api(&extracted, api_base.as_deref(), api_key.as_deref())
+            summarize_embedded(&extracted)
                 .await
                 .unwrap_or_else(|_| fallback_summary(&extracted))
         };
@@ -92,8 +87,6 @@ pub async fn export_cursor(args: ExportCursorArgs) -> Result<()> {
 pub struct CursorExportOpts {
     pub out_dir: PathBuf,
     pub offline: bool,
-    pub api_base: Option<String>,
-    pub api_key: Option<String>,
 }
 
 /// Export transcripts for a specific Cursor project id into a centralized folder.
@@ -120,7 +113,7 @@ pub async fn export_cursor_project(cursor_dir: &Path, project_id: &str, opts: Cu
         let summary = if opts.offline {
             fallback_summary(&extracted)
         } else {
-            summarize_via_api(&extracted, opts.api_base.as_deref(), opts.api_key.as_deref())
+            summarize_embedded(&extracted)
                 .await
                 .unwrap_or_else(|_| fallback_summary(&extracted))
         };
@@ -161,7 +154,6 @@ pub async fn export_cursor_project_chats(
     project_id: &str,
     chat_ids: &[String],
     out_dir: &Path,
-    api_base: &str,
 ) -> Result<usize> {
     let project_root = cursor_dir.join("projects").join(project_id).join("agent-transcripts");
     if !project_root.exists() {
@@ -202,7 +194,7 @@ pub async fn export_cursor_project_chats(
         let raw = fs::read_to_string(&path).with_context(|| format!("Reading {}", path.display()))?;
         let extracted = extract_text_from_jsonl(&raw);
 
-        let summary = summarize_via_api(&extracted, Some(api_base), None)
+        let summary = summarize_embedded(&extracted)
             .await
             .with_context(|| format!("Summarization failed for {}", path.display()))?;
 

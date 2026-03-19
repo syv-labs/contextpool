@@ -1,7 +1,7 @@
 use crate::{
     cli::ExportVscdbArgs,
     paths::{default_out_dir, default_workspace_storage_dir},
-    summarize::{fallback_summary, summarize_via_api},
+    summarize::{fallback_summary, summarize_embedded},
     transcript::extract_text_from_json,
 };
 use anyhow::{Context, Result};
@@ -30,11 +30,6 @@ pub async fn export_vscdb(args: ExportVscdbArgs) -> Result<()> {
         .or_else(|| default_workspace_storage_dir(&args.product))
         .context("Could not determine workspaceStorage directory (try --workspace-storage)")?;
 
-    let api_base = args
-        .api_base
-        .or_else(|| std::env::var("CONTEXT_POOL_API_BASE").ok());
-    let api_key: Option<String> = None;
-
     let db_paths = discover_state_vscdbs(&workspace_storage)?;
     let mut index: Vec<ExportedItem> = Vec::new();
 
@@ -47,7 +42,7 @@ pub async fn export_vscdb(args: ExportVscdbArgs) -> Result<()> {
         let summary = if args.offline {
             fallback_summary(&extracted)
         } else {
-            summarize_via_api(&extracted, api_base.as_deref(), api_key.as_deref())
+            summarize_embedded(&extracted)
                 .await
                 .unwrap_or_else(|_| fallback_summary(&extracted))
         };

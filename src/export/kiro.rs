@@ -1,7 +1,7 @@
 use crate::{
     cli::ExportKiroArgs,
     paths::default_out_dir,
-    summarize::{fallback_summary, summarize_via_api},
+    summarize::{fallback_summary, summarize_embedded},
     transcript::extract_text_from_json,
 };
 use anyhow::{Context, Result};
@@ -16,11 +16,6 @@ pub async fn export_kiro(args: ExportKiroArgs) -> Result<()> {
     let run_dir = out_dir.join("exports").join("kiro").join(run_id.replace(':', "-"));
     fs::create_dir_all(&run_dir).with_context(|| format!("Creating {}", run_dir.display()))?;
 
-    let api_base = args
-        .api_base
-        .or_else(|| std::env::var("CONTEXT_POOL_API_BASE").ok());
-    let api_key: Option<String> = None;
-
     let src = args.chat_json;
     let raw = fs::read_to_string(&src).with_context(|| format!("Reading {}", src.display()))?;
     let extracted = extract_text_from_json(&raw);
@@ -28,7 +23,7 @@ pub async fn export_kiro(args: ExportKiroArgs) -> Result<()> {
     let summary = if args.offline {
         fallback_summary(&extracted)
     } else {
-        summarize_via_api(&extracted, api_base.as_deref(), api_key.as_deref())
+        summarize_embedded(&extracted)
             .await
             .unwrap_or_else(|_| fallback_summary(&extracted))
     };

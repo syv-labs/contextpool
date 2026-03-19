@@ -1,4 +1,6 @@
 mod cli;
+mod credentials;
+mod embedded_agent;
 mod export;
 mod init;
 mod paths;

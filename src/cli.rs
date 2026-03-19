@@ -39,10 +39,6 @@ pub struct InitCursorArgs {
     #[arg(long)]
     pub cursor_dir: Option<PathBuf>,
 
-    /// Summarization API base URL (falls back to CONTEXT_POOL_API_BASE env var)
-    #[arg(long)]
-    pub api_base: Option<String>,
-
     /// Space-separated Cursor chat ids (typically transcript file names without `.jsonl`)
     ///
     /// Example: `cxp init cursor 7b1e... 1a2b...`
@@ -82,10 +78,6 @@ pub struct ExportCursorArgs {
     #[arg(long)]
     pub transcript: Option<PathBuf>,
 
-    /// Summarization API base URL (falls back to CONTEXT_POOL_API_BASE env var)
-    #[arg(long)]
-    pub api_base: Option<String>,
-
     /// Do not call remote API; store a local fallback summary
     #[arg(long)]
     pub offline: bool,
@@ -111,10 +103,6 @@ pub struct ExportVscdbArgs {
     #[arg(long)]
     pub workspace_storage: Option<PathBuf>,
 
-    /// Summarization API base URL (falls back to CONTEXT_POOL_API_BASE env var)
-    #[arg(long)]
-    pub api_base: Option<String>,
-
     /// Do not call remote API; store a local fallback summary
     #[arg(long)]
     pub offline: bool,
@@ -129,10 +117,6 @@ pub struct ExportKiroArgs {
     /// Path to a Kiro exported chat JSON file (from `/chat save <path>`).
     #[arg(long)]
     pub chat_json: PathBuf,
-
-    /// Summarization API base URL (falls back to CONTEXT_POOL_API_BASE env var)
-    #[arg(long)]
-    pub api_base: Option<String>,
 
     /// Do not call remote API; store a local fallback summary
     #[arg(long)]
