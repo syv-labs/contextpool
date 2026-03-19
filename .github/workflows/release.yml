@@ -6,7 +6,12 @@ on:
       - "v*"
   release:
     types: [published]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build/upload (e.g. v0.1.0)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -14,6 +19,8 @@ permissions:
 env:
   BIN_NAME: cxp
   PKG_NAME: cxp
+  PUBLIC_RELEASE_REPO: syv-labs/cxp
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
 
 jobs:
   build:
@@ -74,7 +81,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_TAG#v}"
           mkdir -p dist
           src="target/${{ matrix.target }}/release/${BIN_NAME}${{ matrix.ext }}"
           if [ ! -f "$src" ]; then
@@ -91,7 +98,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $version = "${env:GITHUB_REF_NAME}".TrimStart("v")
+          $version = "${env:RELEASE_TAG}".TrimStart("v")
           New-Item -ItemType Directory -Path dist -Force | Out-Null
           $src = "target/${{ matrix.target }}/release/${env:BIN_NAME}${{ matrix.ext }}"
           if (!(Test-Path $src)) {
@@ -103,22 +110,35 @@ jobs:
           if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
           Compress-Archive -Path "dist/${env:BIN_NAME}${{ matrix.ext }}" -DestinationPath $zipPath -Force
 
-      - name: Upload release assets (tag push)
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            cxp-*.tar.gz
-            cxp-*.zip
+      - name: Upload release asset to public repo
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.CXP_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_TAG}" # e.g. v0.1.0
+          version="${RELEASE_TAG#v}"
+          asset="${PKG_NAME}-v${version}-${{ matrix.target }}"
+          file=""
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            file="${asset}.zip"
+          else
+            file="${asset}.tar.gz"
+          fi
 
-      - name: Upload release assets (release event)
-        if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.event.release.tag_name }}
-          files: |
-            cxp-*.tar.gz
-            cxp-*.zip
+          if [ ! -f "$file" ]; then
+            echo "Expected release asset not found: $file" >&2
+            ls -la . || true
+            exit 1
+          fi
+
+          # Create the public release if it doesn't exist yet (first matrix leg wins).
+          if ! gh release view "$tag" --repo "${PUBLIC_RELEASE_REPO}" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "${PUBLIC_RELEASE_REPO}" -t "$tag" -n "" || true
+          fi
+
+          gh release upload "$tag" "$file" --repo "${PUBLIC_RELEASE_REPO}" --clobber
 
   checksums:
     name: checksums
@@ -127,44 +147,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download release assets (tag push)
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Download public release assets
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.CXP_RELEASE_TOKEN }}
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
+          tag="${RELEASE_TAG}"
           mkdir -p artifacts
-          gh release download "$tag" --dir artifacts
-
-      - name: Download release assets (release event)
-        if: github.event_name == 'release'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          tag="${{ github.event.release.tag_name }}"
-          mkdir -p artifacts
-          gh release download "$tag" --dir artifacts
+          gh release download "$tag" --repo "${PUBLIC_RELEASE_REPO}" --dir artifacts
 
       - name: Generate checksums
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         run: |
           set -euo pipefail
+          mkdir -p artifacts
           cd artifacts
           # Only hash our archives (avoid hashing checksums file itself if re-run)
           ls -1 cxp-*.tar.gz cxp-*.zip 2>/dev/null | xargs -I{} sh -c 'sha256sum "{}"' > checksums.txt
           cat checksums.txt
 
-      - name: Upload checksums (tag push)
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/checksums.txt
-
-      - name: Upload checksums (release event)
-        if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.event.release.tag_name }}
-          files: artifacts/checksums.txt
+      - name: Upload checksums to public repo
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.CXP_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_TAG}"
+          gh release upload "$tag" artifacts/checksums.txt --repo "${PUBLIC_RELEASE_REPO}" --clobber
 
