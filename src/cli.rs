@@ -4,6 +4,10 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(name = "cxp", version, about = "ContextPool: shared memory pool for local IDE/agent chats")]
 pub struct Cli {
+    /// Delete the stored NVIDIA API key from the system keychain (forces re-prompt).
+    #[arg(long)]
+    pub reset_nvidia_api_key: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }

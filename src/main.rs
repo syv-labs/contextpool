@@ -16,6 +16,10 @@ use cli::{Cli, Command, ExportSource, InitSource};
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    if cli.reset_nvidia_api_key {
+        credentials::reset_nvidia_api_key()?;
+    }
+
     match cli.command {
         Command::Init(args) => match args.source {
             InitSource::Cursor(args) => init::init_cursor(args).await,

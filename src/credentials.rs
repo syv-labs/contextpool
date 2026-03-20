@@ -68,3 +68,28 @@ pub fn ensure_nvidia_api_key_interactive() -> Result<String> {
     Ok(key)
 }
 
+/// Deletes the stored NVIDIA API key from the system keychain (best-effort).
+/// This forces `ensure_nvidia_api_key_interactive()` to re-prompt on the next call.
+pub fn reset_nvidia_api_key() -> Result<()> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER);
+    let Ok(entry) = entry else {
+        // If we can't even initialize the keychain entry, still don't crash the CLI.
+        eprintln!("Warning: could not initialize keychain entry; continuing without reset.");
+        return Ok(());
+    };
+
+    match entry.delete_credential() {
+        Ok(()) => eprintln!("Cleared NVIDIA API key from system keychain."),
+        Err(keyring::Error::NoEntry) => {
+            eprintln!("No saved NVIDIA API key found in system keychain.");
+        }
+        Err(e) => {
+            return Err(anyhow::anyhow!(
+                "Failed to clear NVIDIA API key from system keychain: {e}"
+            ))
+        }
+    }
+
+    Ok(())
+}
+
