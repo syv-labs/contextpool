@@ -1,14 +1,64 @@
 use anyhow::{Context, Result};
 use std::{
+    fs,
     io::{self, IsTerminal, Write},
+    path::PathBuf,
     sync::OnceLock,
 };
 
 const KEYRING_SERVICE: &str = "contextpool";
 const KEYRING_USER: &str = "default";
 const ENV_KEY: &str = "NVIDIA_API_KEY";
+const API_KEY_FILE_NAME: &str = "nvidia_api_key";
 
 static CACHED_KEY: OnceLock<String> = OnceLock::new();
+
+fn api_key_file_path() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        .join("ContextPool")
+        .join(API_KEY_FILE_NAME)
+}
+
+fn load_api_key_from_file() -> Option<String> {
+    let path = api_key_file_path();
+    let Ok(raw) = fs::read_to_string(&path) else {
+        return None;
+    };
+    let key = raw.trim().to_string();
+    if key.is_empty() {
+        return None;
+    }
+    Some(key)
+}
+
+fn save_api_key_to_file(key: &str) -> Result<()> {
+    let path = api_key_file_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("Creating {}", parent.display()))?;
+    }
+    fs::write(&path, key).with_context(|| format!("Writing {}", path.display()))?;
+
+    // Best-effort permissions hardening (0600).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&path)?.permissions();
+        perms.set_mode(0o600);
+        fs::set_permissions(&path, perms)?;
+    }
+
+    Ok(())
+}
+
+fn delete_api_key_file() -> Result<()> {
+    let path = api_key_file_path();
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(anyhow::anyhow!("Failed deleting {}: {e}", path.display())),
+    }
+}
 
 pub fn load_nvidia_api_key() -> Option<String> {
     if let Some(k) = CACHED_KEY.get() {
@@ -31,7 +81,9 @@ pub fn load_nvidia_api_key() -> Option<String> {
         }
     }
 
-    None
+    // Fallback for cases where keychain access is flaky/unavailable across processes.
+    // This is a last resort cache; keychain remains the primary store.
+    load_api_key_from_file()
 }
 
 pub fn ensure_nvidia_api_key_interactive() -> Result<String> {
@@ -65,6 +117,12 @@ pub fn ensure_nvidia_api_key_interactive() -> Result<String> {
         }
     }
 
+    // Also persist to a local 0600 cache file so new processes can still find it
+    // even if keychain access fails for some reason.
+    if save_api_key_to_file(&key).is_ok() {
+        eprintln!("Saved API key for future runs.");
+    }
+
     Ok(key)
 }
 
@@ -89,6 +147,9 @@ pub fn reset_nvidia_api_key() -> Result<()> {
             ))
         }
     }
+
+    // Also clear the local file fallback.
+    let _ = delete_api_key_file();
 
     Ok(())
 }
