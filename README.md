@@ -63,6 +63,16 @@ You can override the centralized store location:
 ./target/release/cxp init cursor <chat-id> --out ./contextpool-store
 ```
 
+Or store everything locally under the current working directory:
+
+```bash
+./target/release/cxp init cursor --local
+```
+
+This writes:
+- centralized store: `./ContextPool/projects/<project-id>/`
+- summaries: `./ContextPool/projects/<project-id>/imports/cursor/<timestamp>/`
+
 ## Export Cursor chats (debug / bulk export)
 
 Scans common Cursor transcript locations under `~/.cursor`:

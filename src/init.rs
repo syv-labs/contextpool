@@ -15,7 +15,11 @@ pub async fn init_claude_code(args: InitClaudeCodeArgs) -> Result<()> {
     let cwd = std::env::current_dir().context("Could not determine current directory")?;
     let project_id = project_id_from_path(&cwd);
 
-    let base = args.out.unwrap_or_else(|| default_out_dir());
+    let base = if args.local {
+        cwd.join("ContextPool")
+    } else {
+        args.out.unwrap_or_else(|| default_out_dir())
+    };
     fs::create_dir_all(&base).with_context(|| format!("Creating {}", base.display()))?;
 
     let proj_dir = project_dir(&base, &project_id);
@@ -64,7 +68,11 @@ pub async fn init_cursor(args: InitCursorArgs) -> Result<()> {
     let cwd = std::env::current_dir().context("Could not determine current directory")?;
     let project_id = project_id_from_path(&cwd);
 
-    let base = args.out.unwrap_or_else(|| default_out_dir());
+    let base = if args.local {
+        cwd.join("ContextPool")
+    } else {
+        args.out.unwrap_or_else(|| default_out_dir())
+    };
     fs::create_dir_all(&base).with_context(|| format!("Creating {}", base.display()))?;
 
     let proj_dir = project_dir(&base, &project_id);

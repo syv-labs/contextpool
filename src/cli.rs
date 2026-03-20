@@ -42,6 +42,10 @@ pub struct InitClaudeCodeArgs {
     #[arg(long)]
     pub out: Option<PathBuf>,
 
+    /// Store initialized summaries inside the current directory (`./ContextPool/...`)
+    #[arg(long, conflicts_with = "out")]
+    pub local: bool,
+
     /// Claude Code root directory (defaults to ~/.claude)
     #[arg(long)]
     pub claude_dir: Option<PathBuf>,
@@ -58,6 +62,10 @@ pub struct InitCursorArgs {
     /// Optional centralized storage directory (defaults to OS local app data dir)
     #[arg(long)]
     pub out: Option<PathBuf>,
+
+    /// Store initialized summaries inside the current directory (`./ContextPool/...`)
+    #[arg(long, conflicts_with = "out")]
+    pub local: bool,
 
     /// Cursor root directory (defaults to ~/.cursor)
     #[arg(long)]
