@@ -19,9 +19,11 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Init(args) => match args.source {
             InitSource::Cursor(args) => init::init_cursor(args).await,
+            InitSource::ClaudeCode(args) => init::init_claude_code(args).await,
         },
         Command::Export(args) => match args.source {
             ExportSource::Cursor(args) => export::cursor::export_cursor(args).await,
+            ExportSource::ClaudeCode(args) => export::claude_code::export_claude_code(args).await,
             ExportSource::Vscdb(args) => export::vscdb::export_vscdb(args).await,
             ExportSource::Kiro(args) => export::kiro::export_kiro(args).await,
         },

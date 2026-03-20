@@ -46,6 +46,20 @@ pub fn default_cursor_dir() -> Option<PathBuf> {
     None
 }
 
+pub fn default_claude_code_dir() -> Option<PathBuf> {
+    // Claude Code stores conversations under ~/.claude on all platforms.
+    let home = dirs::home_dir()?;
+    let candidate = home.join(".claude");
+    if candidate.join("projects").exists() {
+        return Some(candidate);
+    }
+    // Return the path even if projects/ doesn't exist yet so callers can report a useful error.
+    if candidate.exists() {
+        return Some(candidate);
+    }
+    None
+}
+
 pub fn default_workspace_storage_dir(product: &str) -> Option<PathBuf> {
     let product = if product.trim().is_empty() {
         "Cursor"

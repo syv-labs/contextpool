@@ -27,6 +27,26 @@ pub struct InitArgs {
 pub enum InitSource {
     /// Initialize memory from Cursor for the current directory's project id
     Cursor(InitCursorArgs),
+
+    /// Initialize memory from Claude Code for the current directory's project id
+    ClaudeCode(InitClaudeCodeArgs),
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct InitClaudeCodeArgs {
+    /// Optional centralized storage directory (defaults to OS local app data dir)
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+
+    /// Claude Code root directory (defaults to ~/.claude)
+    #[arg(long)]
+    pub claude_dir: Option<PathBuf>,
+
+    /// Space-separated Claude Code session ids (typically session file names without `.jsonl`)
+    ///
+    /// Example: `cxp init claude-code 7b1e... 1a2b...`
+    #[arg(required = false)]
+    pub session_ids: Vec<String>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -57,11 +77,33 @@ pub enum ExportSource {
     /// Export Cursor agent transcripts (*.jsonl) and store summaries locally
     Cursor(ExportCursorArgs),
 
+    /// Export Claude Code session files (*.jsonl) from ~/.claude/projects
+    ClaudeCode(ExportClaudeCodeArgs),
+
     /// Export chat history from VS Code-style workspace storage (state.vscdb)
     Vscdb(ExportVscdbArgs),
 
     /// Export chats from a Kiro `/chat save` JSON file
     Kiro(ExportKiroArgs),
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct ExportClaudeCodeArgs {
+    /// Optional output directory (defaults to app data dir)
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+
+    /// Claude Code root directory (defaults to ~/.claude)
+    #[arg(long)]
+    pub claude_dir: Option<PathBuf>,
+
+    /// Export a single Claude Code session file (.jsonl) instead of scanning all projects
+    #[arg(long)]
+    pub session: Option<PathBuf>,
+
+    /// Do not call remote API; store a local fallback summary
+    #[arg(long)]
+    pub offline: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
