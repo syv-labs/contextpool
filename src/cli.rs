@@ -19,6 +19,16 @@ pub enum Command {
 
     /// Export chats from Cursor (scans ~/.cursor)
     Export(ExportArgs),
+
+    /// Start the MCP server so Claude Code can query stored context
+    Mcp(McpArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct McpArgs {
+    /// Data directory to read summaries from (defaults to OS local app data dir)
+    #[arg(long)]
+    pub data_dir: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug, Clone)]

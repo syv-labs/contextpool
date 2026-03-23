@@ -10,29 +10,58 @@ cargo build --release
 
 Binary will be at `target/release/cxp`.
 
-## Install (cross-platform binaries)
+## Install
 
-This repo ships prebuilt binaries via GitHub Releases. End users do **not** need Rust installed.
+No Rust required. One command installs the `cxp` binary:
 
-- **macOS / Linux** (shell):
+- **macOS / Linux:**
 
 ```bash
-export CONTEXTPOOL_REPO="OWNER/REPO"
-curl -fsSL "https://raw.githubusercontent.com/$CONTEXTPOOL_REPO/main/install.sh" | sh
+curl -fsSL https://raw.githubusercontent.com/syv-labs/cxp/main/install.sh | sh
 ```
 
 - **Windows** (PowerShell):
 
 ```powershell
-$env:CONTEXTPOOL_REPO="OWNER/REPO"
-irm "https://raw.githubusercontent.com/$env:CONTEXTPOOL_REPO/main/install.ps1" | iex
+irm https://raw.githubusercontent.com/syv-labs/cxp/main/install.ps1 | iex
 ```
 
-To install a specific version:
-- `CONTEXTPOOL_VERSION=0.1.0` (shell) / `$env:CONTEXTPOOL_VERSION="0.1.0"` (PowerShell)
+To install a specific version, set `CONTEXTPOOL_VERSION=0.1.0` (shell) or `$env:CONTEXTPOOL_VERSION="0.1.0"` (PowerShell) before running.
 
-Release automation:
-- Pushing a git tag like `v0.1.0` builds and uploads `tar.gz`/`zip` assets plus `checksums.txt`.
+Release automation: pushing a git tag like `v0.1.0` builds and uploads `tar.gz`/`zip` assets plus `checksums.txt`.
+
+## Use with Claude Code (MCP plugin)
+
+`cxp` works as a Claude Code plugin — no manual import commands needed. Claude can discover and load your Cursor/Claude Code session context directly.
+
+**1. Install `cxp` (above)**
+
+**2. Add to `~/.claude/settings.json`:**
+
+```json
+{
+  "mcpServers": {
+    "contextpool": {
+      "command": "cxp",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+**3. Set your NVIDIA API key** (once, so the MCP server can summarize without prompting):
+
+```bash
+cxp export cursor --offline   # triggers the key prompt and saves it to the keychain
+```
+
+That's it. Claude Code will now automatically have access to three tools:
+
+- **`fetch_project_context`** — scans your Cursor and Claude Code transcripts for the current project, summarizes new ones, and returns a compact index of what's available
+- **`get_project_context`** — loads the full content of selected summaries into Claude's context
+- **`search_context`** — searches across summaries for a keyword or phrase
+
+The typical flow is: Claude calls `fetch_project_context` to see what memory is available, then calls `get_project_context` with the relevant ids to load it. Summaries are stored in `<project>/ContextPool/` alongside your code.
 
 ## Initialize memory for current directory (Cursor-only flow)
 
