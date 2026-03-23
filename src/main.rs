@@ -3,6 +3,7 @@ mod credentials;
 mod embedded_agent;
 mod export;
 mod init;
+mod mcp;
 mod paths;
 mod project;
 mod summarize;
@@ -10,7 +11,7 @@ mod transcript;
 
 use anyhow::Result;
 use clap::Parser;
-use cli::{Cli, Command, ExportSource, InitSource};
+use cli::{Cli, Command, ExportSource, InitSource, McpArgs};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -31,5 +32,6 @@ async fn main() -> Result<()> {
             ExportSource::Vscdb(args) => export::vscdb::export_vscdb(args).await,
             ExportSource::Kiro(args) => export::kiro::export_kiro(args).await,
         },
+        Command::Mcp(McpArgs { data_dir }) => mcp::run_server(data_dir).await,
     }
 }
