@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{credentials::ensure_nvidia_api_key_interactive, embedded_agent};
+use crate::{credentials::{ensure_nvidia_api_key_interactive, load_api_backend, ApiBackend}, embedded_agent};
 
 fn redact_secrets(text: &str) -> String {
     // Keep this intentionally simple and conservative: prefer false-positives over leaking secrets.
@@ -70,10 +70,15 @@ pub fn fallback_summary(text: &str) -> String {
 }
 
 pub async fn summarize_embedded(text: &str) -> Result<String> {
-    let api_key = ensure_nvidia_api_key_interactive()?;
+    // Prefer Anthropic key (already in env when running inside Claude Code / Cursor),
+    // fall back to NVIDIA with an interactive prompt.
+    let backend = match load_api_backend() {
+        Some(b) => b,
+        None => ApiBackend::Nvidia(ensure_nvidia_api_key_interactive()?),
+    };
 
     let redacted = redact_secrets(text);
-    let opts = embedded_agent::EmbeddedAgentOptions::from_env(api_key);
+    let opts = embedded_agent::EmbeddedAgentOptions::from_env(backend);
 
     // CLI feedback: show progress while the model is generating.
     // (We avoid adding a spinner dependency by printing dots from a background thread.)

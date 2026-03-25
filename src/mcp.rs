@@ -59,12 +59,13 @@ impl ContextPoolServer {
         }
 
         // Require API key to be pre-configured (keychain / env) — no interactive prompt in MCP.
-        let api_key = match crate::credentials::load_nvidia_api_key() {
-            Some(k) => k,
+        let backend = match crate::credentials::load_api_backend() {
+            Some(b) => b,
             None => {
-                return "NVIDIA API key not configured. \
-                    Set the NVIDIA_API_KEY env var, or run `cxp export cursor` once \
-                    from a terminal to save the key to the system keychain."
+                return "No API key configured. \
+                    Set ANTHROPIC_API_KEY (preferred when running inside Claude Code / Cursor) \
+                    or NVIDIA_API_KEY, or run `cxp export cursor` once from a terminal \
+                    to save the NVIDIA key to the system keychain."
                     .to_string()
             }
         };
@@ -78,7 +79,7 @@ impl ContextPoolServer {
         }
 
         // Summarize new transcripts
-        let opts = EmbeddedAgentOptions::from_env(api_key);
+        let opts = EmbeddedAgentOptions::from_env(backend);
         let run_id = Utc::now()
             .to_rfc3339_opts(SecondsFormat::Secs, true)
             .replace(':', "-");
