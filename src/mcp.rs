@@ -211,13 +211,20 @@ impl ServerHandler for ContextPoolServer {
                 version: env!("CARGO_PKG_VERSION").into(),
             },
             instructions: Some(
-                "Two-step workflow: \
-                 (1) Call fetch_project_context to discover and index transcripts from Cursor and \
-                 Claude Code — this returns a compact index of available summaries with ids, titles, \
-                 and tags. No manual CLI setup needed. \
-                 (2) Call get_project_context with the ids that look relevant to load their full \
-                 content into memory. \
-                 Use search_context to find summaries matching a keyword across projects."
+                "ContextPool gives you persistent memory across sessions. Follow these rules:\n\n\
+                 If this is the first message in a new conversation for this project, call \
+                 fetch_project_context once to index any new transcripts and load the summary index. \
+                 Then call get_project_context with relevant ids to load insights before starting work.\n\n\
+                 When the user references a past conversation, asks you to remember something discussed before, \
+                 or says things like \"we talked about this\", \"remember when we...\", \"in our last session\", \
+                 first try search_context or get_project_context with relevant keywords to find the discussion. \
+                 Only call fetch_project_context if the search returns no results — fetching re-indexes \
+                 transcripts and will pick up sessions that haven't been summarized yet.\n\n\
+                 When debugging a bug, encountering an error, or making an architectural decision, \
+                 call search_context with relevant keywords (error messages, component names, library names) \
+                 to check if the issue was addressed in a prior session.\n\n\
+                 Use list_context_projects to see all projects with stored context when the user \
+                 works across multiple repositories."
                     .into(),
             ),
         }
