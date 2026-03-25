@@ -1,3 +1,11 @@
+/// Extract a clean conversation transcript from a JSONL file.
+///
+/// Supports two schemas:
+/// - Claude Code  (`type` field at top level: "user" | "assistant" | ...)
+/// - Cursor agent (`role` field at top level: "user" | "assistant")
+///
+/// For both schemas only human-readable text turns are kept.
+/// Thinking blocks, tool calls/results, file snapshots, progress events, etc. are dropped.
 pub fn extract_text_from_jsonl(jsonl: &str) -> String {
     let mut out = String::new();
     for line in jsonl.lines() {
@@ -5,19 +13,118 @@ pub fn extract_text_from_jsonl(jsonl: &str) -> String {
         if line.is_empty() {
             continue;
         }
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-            if let Some(s) = extract_text_from_value(&v) {
-                out.push_str(&s);
-                out.push('\n');
-                continue;
-            }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+
+        if let Some(text) = try_claude_code(&v) {
+            out.push_str(&text);
+        } else if let Some(text) = try_cursor(&v) {
+            out.push_str(&text);
         }
-        // Fallback: keep raw line if unknown format
-        out.push_str(line);
-        out.push('\n');
+        // Unknown format: skip entirely rather than dumping raw JSON noise
     }
     out
 }
+
+// ── Claude Code schema ────────────────────────────────────────────────────────
+
+/// Claude Code JSONL line: top-level `type` is "user" or "assistant".
+/// All other types (file-history-snapshot, progress, queue-operation, …) are ignored.
+fn try_claude_code(v: &serde_json::Value) -> Option<String> {
+    let record_type = v.get("type")?.as_str()?;
+    let role = match record_type {
+        "user" => "User",
+        "assistant" => "Assistant",
+        _ => return Some(String::new()), // known-but-unneeded type: swallow silently
+    };
+
+    let message = v.get("message")?;
+    let content = message.get("content")?;
+
+    let text = match content {
+        // Simple string content (rare but valid)
+        serde_json::Value::String(s) => {
+            let t = s.trim().to_string();
+            if t.is_empty() { return Some(String::new()); }
+            t
+        }
+        // Array of typed content blocks
+        serde_json::Value::Array(blocks) => {
+            let mut parts: Vec<&str> = Vec::new();
+            for block in blocks {
+                let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                match block_type {
+                    // Keep only plain text blocks
+                    "text" => {
+                        if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
+                            let t = t.trim();
+                            if !t.is_empty() {
+                                parts.push(t);
+                            }
+                        }
+                    }
+                    // Drop everything else: thinking, tool_use, tool_result, …
+                    _ => {}
+                }
+            }
+            if parts.is_empty() { return Some(String::new()); }
+            parts.join("\n")
+        }
+        _ => return Some(String::new()),
+    };
+
+    Some(format!("{role}: {text}\n\n"))
+}
+
+// ── Cursor agent schema ───────────────────────────────────────────────────────
+
+/// Cursor JSONL line: top-level `role` is "user" or "assistant",
+/// `message` is an object with a `content` array of `{type, text}` blocks.
+fn try_cursor(v: &serde_json::Value) -> Option<String> {
+    let role = match v.get("role")?.as_str()? {
+        "user" => "User",
+        "assistant" => "Assistant",
+        _ => return None,
+    };
+
+    let message = v.get("message")?;
+
+    // content may be a direct string or an array of blocks
+    let text = if let Some(s) = message.as_str() {
+        s.trim().to_string()
+    } else if let Some(content) = message.get("content") {
+        match content {
+            serde_json::Value::String(s) => s.trim().to_string(),
+            serde_json::Value::Array(blocks) => {
+                let mut parts: Vec<&str> = Vec::new();
+                for block in blocks {
+                    let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("text");
+                    if block_type == "text" {
+                        if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
+                            let t = t.trim();
+                            if !t.is_empty() {
+                                parts.push(t);
+                            }
+                        }
+                    }
+                }
+                parts.join("\n")
+            }
+            _ => return None,
+        }
+    } else {
+        return None;
+    };
+
+    if text.is_empty() {
+        return Some(String::new());
+    }
+
+    Some(format!("{role}: {text}\n\n"))
+}
+
+// ── Legacy helpers (used by export/vscdb and export/kiro paths) ───────────────
 
 pub fn extract_text_from_json(json: &str) -> String {
     let trimmed = json.trim();
@@ -28,34 +135,6 @@ pub fn extract_text_from_json(json: &str) -> String {
         Ok(v) => extract_strings_deep(&v).join("\n"),
         Err(_) => trimmed.to_string(),
     }
-}
-
-fn extract_text_from_value(v: &serde_json::Value) -> Option<String> {
-    // We don't assume a single schema; try a few common shapes.
-    let keys = ["content", "text", "message", "body"];
-    for k in keys {
-        if let Some(val) = v.get(k) {
-            if let Some(s) = val.as_str() {
-                return Some(s.to_string());
-            }
-        }
-    }
-
-    // Sometimes messages are nested: { message: { content: "..." } }
-    if let Some(m) = v.get("message") {
-        if let Some(s) = m.as_str() {
-            return Some(s.to_string());
-        }
-        if let Some(obj) = m.as_object() {
-            for k in keys {
-                if let Some(val) = obj.get(k).and_then(|x| x.as_str()) {
-                    return Some(val.to_string());
-                }
-            }
-        }
-    }
-
-    None
 }
 
 fn extract_strings_deep(v: &serde_json::Value) -> Vec<String> {
@@ -79,8 +158,6 @@ fn walk_value(v: &serde_json::Value, out: &mut Vec<String>) {
             }
         }
         serde_json::Value::Object(obj) => {
-            // Prefer a few common "message content" keys to keep the output tighter.
-            // If present, record those first, then continue deep-walk.
             for k in ["content", "text", "message", "body"] {
                 if let Some(val) = obj.get(k) {
                     if let Some(s) = val.as_str() {
@@ -97,4 +174,3 @@ fn walk_value(v: &serde_json::Value, out: &mut Vec<String>) {
         }
     }
 }
-
