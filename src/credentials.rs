@@ -9,7 +9,49 @@ use std::{
 const KEYRING_SERVICE: &str = "contextpool";
 const KEYRING_USER: &str = "default";
 const ENV_KEY: &str = "NVIDIA_API_KEY";
+const ANTHROPIC_ENV_KEY: &str = "ANTHROPIC_API_KEY";
 const API_KEY_FILE_NAME: &str = "nvidia_api_key";
+
+/// Which LLM backend to use for summarization.
+#[derive(Clone, Debug)]
+pub enum ApiBackend {
+    /// Use `claude -p` subprocess — inherits Claude Code / Cursor auth, no API key needed.
+    ClaudeCodeCli,
+    /// Anthropic Claude (uses the Messages API).
+    Anthropic(String),
+    /// OpenAI chat completions API.
+    OpenAI(String),
+    /// NVIDIA NIM / OpenAI-compatible endpoint.
+    Nvidia(String),
+}
+
+/// Priority: claude CLI → ANTHROPIC_API_KEY → OPENAI_API_KEY → NVIDIA key chain.
+/// Returns `None` only if no backend is available at all.
+pub fn load_api_backend() -> Option<ApiBackend> {
+    if claude_cli_in_path() {
+        return Some(ApiBackend::ClaudeCodeCli);
+    }
+    if let Ok(v) = std::env::var(ANTHROPIC_ENV_KEY) {
+        let t = v.trim().to_string();
+        if !t.is_empty() {
+            return Some(ApiBackend::Anthropic(t));
+        }
+    }
+    if let Ok(v) = std::env::var("OPENAI_API_KEY") {
+        let t = v.trim().to_string();
+        if !t.is_empty() {
+            return Some(ApiBackend::OpenAI(t));
+        }
+    }
+    load_nvidia_api_key().map(ApiBackend::Nvidia)
+}
+
+fn claude_cli_in_path() -> bool {
+    std::env::var("PATH")
+        .unwrap_or_default()
+        .split(':')
+        .any(|dir| std::path::Path::new(dir).join("claude").exists())
+}
 
 static CACHED_KEY: OnceLock<String> = OnceLock::new();
 

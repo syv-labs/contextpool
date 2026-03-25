@@ -2,7 +2,14 @@ use anyhow::{Context, Result};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+use crate::credentials::ApiBackend;
+
 const NVIDIA_BASE_URL: &str = "https://integrate.api.nvidia.com/v1";
+const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com/v1";
+const ANTHROPIC_VERSION: &str = "2023-06-01";
+const ANTHROPIC_DEFAULT_MODEL: &str = "claude-haiku-4-5-20251001";
+const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+const OPENAI_DEFAULT_MODEL: &str = "gpt-4o-mini";
 
 // Mirrors `context-generator-agent/main.py` intent.
 const SYSTEM_PROMPT: &str = r#"
@@ -91,7 +98,7 @@ Return STRICT JSON only.
 
 #[derive(Debug, Clone)]
 pub struct EmbeddedAgentOptions {
-    pub api_key: String,
+    pub backend: ApiBackend,
     pub model: String,
     pub repair_model: String,
     pub temperature: f32,
@@ -103,8 +110,14 @@ pub struct EmbeddedAgentOptions {
 }
 
 impl EmbeddedAgentOptions {
-    pub fn from_env(api_key: String) -> Self {
-        let model = std::env::var("MODEL").unwrap_or_else(|_| "qwen/qwen3.5-122b-a10b".to_string());
+    pub fn from_env(backend: ApiBackend) -> Self {
+        let default_model = match &backend {
+            ApiBackend::ClaudeCodeCli => ANTHROPIC_DEFAULT_MODEL.to_string(),
+            ApiBackend::Anthropic(_) => ANTHROPIC_DEFAULT_MODEL.to_string(),
+            ApiBackend::OpenAI(_) => OPENAI_DEFAULT_MODEL.to_string(),
+            ApiBackend::Nvidia(_) => "qwen/qwen3.5-122b-a10b".to_string(),
+        };
+        let model = std::env::var("MODEL").unwrap_or(default_model);
         let repair_model = std::env::var("REPAIR_MODEL").unwrap_or_else(|_| model.clone());
         let temperature = std::env::var("TEMPERATURE")
             .ok()
@@ -136,7 +149,7 @@ impl EmbeddedAgentOptions {
         let debug_raw_output = matches!(debug_raw_output.as_str(), "1" | "true" | "yes" | "on");
 
         Self {
-            api_key,
+            backend,
             model,
             repair_model,
             temperature,
@@ -181,6 +194,34 @@ struct Choice {
 #[derive(Deserialize)]
 struct ChoiceMessage {
     content: Option<String>,
+}
+
+// ── Anthropic Messages API types ─────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct AnthropicRequest<'a> {
+    model: &'a str,
+    max_tokens: u32,
+    system: &'a str,
+    messages: Vec<AnthropicMessage<'a>>,
+}
+
+#[derive(Serialize)]
+struct AnthropicMessage<'a> {
+    role: &'a str,
+    content: &'a str,
+}
+
+#[derive(Deserialize)]
+struct AnthropicResponse {
+    content: Vec<AnthropicContentBlock>,
+}
+
+#[derive(Deserialize)]
+struct AnthropicContentBlock {
+    #[serde(rename = "type")]
+    block_type: String,
+    text: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -355,6 +396,144 @@ async fn call_nvidia_chat(
     Ok(content)
 }
 
+async fn call_chat(
+    client: &reqwest::Client,
+    backend: &ApiBackend,
+    model: &str,
+    system: &str,
+    user: &str,
+    temperature: f32,
+    top_p: f32,
+    max_tokens: u32,
+) -> Result<String> {
+    match backend {
+        ApiBackend::ClaudeCodeCli => call_claude_cli(system, user).await,
+        ApiBackend::Anthropic(key) => {
+            call_anthropic_chat(client, key, model, system, user, max_tokens).await
+        }
+        ApiBackend::OpenAI(key) => {
+            call_openai_chat(client, key, model, system, user, temperature, top_p, max_tokens).await
+        }
+        ApiBackend::Nvidia(key) => {
+            call_nvidia_chat(client, key, model, system, user, temperature, top_p, max_tokens).await
+        }
+    }
+}
+
+async fn call_anthropic_chat(
+    client: &reqwest::Client,
+    api_key: &str,
+    model: &str,
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+) -> Result<String> {
+    let url = format!("{}/messages", ANTHROPIC_BASE_URL);
+    let req_body = AnthropicRequest {
+        model,
+        max_tokens,
+        system,
+        messages: vec![AnthropicMessage {
+            role: "user",
+            content: user,
+        }],
+    };
+
+    let resp = client
+        .post(url)
+        .header("x-api-key", api_key)
+        .header("anthropic-version", ANTHROPIC_VERSION)
+        .json(&req_body)
+        .send()
+        .await
+        .context("Anthropic messages request failed")?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let t = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Anthropic API returned {}: {}", status, t);
+    }
+
+    let parsed = resp
+        .json::<AnthropicResponse>()
+        .await
+        .context("Invalid Anthropic messages JSON")?;
+
+    let text = parsed
+        .content
+        .into_iter()
+        .filter(|b| b.block_type == "text")
+        .filter_map(|b| b.text)
+        .collect::<Vec<_>>()
+        .join("");
+
+    Ok(text)
+}
+
+async fn call_openai_chat(
+    client: &reqwest::Client,
+    api_key: &str,
+    model: &str,
+    system: &str,
+    user: &str,
+    temperature: f32,
+    top_p: f32,
+    max_tokens: u32,
+) -> Result<String> {
+    let url = format!("{}/chat/completions", OPENAI_BASE_URL);
+    let req_body = ChatCompletionRequest {
+        model,
+        messages: vec![
+            Message { role: "system", content: system },
+            Message { role: "user", content: user },
+        ],
+        temperature: Some(temperature),
+        top_p: Some(top_p),
+        max_tokens: Some(max_tokens),
+        stream: false,
+    };
+    let resp = client
+        .post(url)
+        .bearer_auth(api_key)
+        .json(&req_body)
+        .send()
+        .await
+        .context("OpenAI request failed")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let t = resp.text().await.unwrap_or_default();
+        anyhow::bail!("OpenAI API returned {}: {}", status, t);
+    }
+    let parsed = resp
+        .json::<ChatCompletionResponse>()
+        .await
+        .context("Invalid OpenAI JSON")?;
+    Ok(parsed
+        .choices
+        .into_iter()
+        .filter_map(|c| c.message.content)
+        .collect::<Vec<_>>()
+        .join(""))
+}
+
+async fn call_claude_cli(system: &str, user: &str) -> Result<String> {
+    let combined = format!("{}\n\n{}", system.trim(), user.trim());
+    let output = tokio::process::Command::new("claude")
+        .arg("-p")
+        .arg(&combined)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .await
+        .context("Failed to spawn `claude` CLI")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("`claude -p` exited with {}: {}", output.status, stderr);
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 pub async fn generate_context_items(
     chat_text: &str,
     files: &[String],
@@ -369,17 +548,7 @@ pub async fn generate_context_items(
     let client = reqwest::Client::new();
     let user = user_prompt(&chat, files, repo_type);
 
-    let raw = call_nvidia_chat(
-        &client,
-        &opts.api_key,
-        &opts.model,
-        SYSTEM_PROMPT,
-        &user,
-        opts.temperature,
-        opts.top_p,
-        opts.max_completion_tokens,
-    )
-    .await?;
+    let raw = call_chat(&client, &opts.backend, &opts.model, SYSTEM_PROMPT, &user, opts.temperature, opts.top_p, opts.max_completion_tokens).await?;
 
     let mut items = parse_context_items(&raw);
 
@@ -404,18 +573,9 @@ MODEL OUTPUT TO CONVERT:
             raw = raw
         );
 
-        let repaired_raw = call_nvidia_chat(
-            &client,
-            &opts.api_key,
-            &opts.repair_model,
-            repair_system,
-            &repair_user,
-            0.0,
-            0.95,
-            opts.max_completion_tokens,
-        )
-        .await
-        .unwrap_or_default();
+        let repaired_raw = call_chat(&client, &opts.backend, &opts.repair_model, repair_system, &repair_user, 0.0, 0.95, opts.max_completion_tokens)
+            .await
+            .unwrap_or_default();
 
         if !repaired_raw.trim().is_empty() {
             items = parse_context_items(&repaired_raw);
