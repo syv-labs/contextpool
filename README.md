@@ -1,43 +1,34 @@
-# ContextPool (CLI)
+# ContextPool (`cxp`)
 
-Create a centralized, per-project “memory” store from locally stored IDE/agent chats (starting with Cursor).
-
-## Build
-
-```bash
-cargo build --release
-```
-
-Binary will be at `target/release/cxp`.
+A per-project memory store that extracts engineering insights from your local IDE/agent chat transcripts (Cursor, Claude Code, Kiro, VS Code forks) and exposes them via an MCP server. Works inside Claude Code and Cursor with no API key required.
 
 ## Install
 
 No Rust required. One command installs the `cxp` binary:
 
-- **macOS / Linux:**
-
+**macOS / Linux:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/syv-labs/cxp/main/install.sh | sh
 ```
 
-- **Windows** (PowerShell):
-
+**Windows (PowerShell):**
 ```powershell
 irm https://raw.githubusercontent.com/syv-labs/cxp/main/install.ps1 | iex
 ```
 
-To install a specific version, set `CONTEXTPOOL_VERSION=0.1.0` (shell) or `$env:CONTEXTPOOL_VERSION="0.1.0"` (PowerShell) before running.
+To pin a version, set `CONTEXTPOOL_VERSION=0.1.0` (shell) or `$env:CONTEXTPOOL_VERSION="0.1.0"` (PowerShell) before running.
 
-Release automation: pushing a git tag like `v0.1.0` builds and uploads `tar.gz`/`zip` assets plus `checksums.txt`.
+**Build from source:**
+```bash
+cargo build --release
+# binary at target/release/cxp
+```
 
-## Use with Claude Code (MCP plugin)
+---
 
-`cxp` works as a Claude Code plugin — no manual import commands needed. Claude can discover and load your Cursor/Claude Code session context directly.
+## MCP Setup (Claude Code)
 
-**1. Install `cxp` (above)**
-
-**2. Add to `~/.claude/settings.json`:**
-
+**1. Add to `~/.claude/settings.json`:**
 ```json
 {
   "mcpServers": {
@@ -49,130 +40,168 @@ Release automation: pushing a git tag like `v0.1.0` builds and uploads `tar.gz`/
 }
 ```
 
-**3. Set your NVIDIA API key** (once, so the MCP server can summarize without prompting):
+**2. That's it.** No API key needed — `cxp` uses the `claude` CLI that ships with Claude Code.
 
-```bash
-cxp export cursor --offline   # triggers the key prompt and saves it to the keychain
+Claude will now have access to four tools:
+
+| Tool | Description |
+|------|-------------|
+| `fetch_project_context` | Scans Cursor and Claude Code transcripts for the current project, summarizes new ones, returns a compact index |
+| `get_project_context` | Loads full markdown content of selected summaries into context |
+| `search_context` | Full-text search across all summaries for a keyword or phrase |
+| `list_context_projects` | Lists all projects that have stored context with summary counts |
+
+**Typical workflow:** Claude calls `fetch_project_context` → picks relevant ids → calls `get_project_context` to load them.
+
+Summaries are stored locally in `<project>/ContextPool/` alongside your code.
+
+---
+
+## MCP Setup (Cursor)
+
+**1. Add to Cursor's MCP config (`~/.cursor/mcp.json` or via Settings → MCP):**
+```json
+{
+  "mcpServers": {
+    "contextpool": {
+      "command": "cxp",
+      "args": ["mcp"]
+    }
+  }
+}
 ```
 
-That's it. Claude Code will now automatically have access to three tools:
+**2. API key:** Cursor does not expose its own auth to subprocesses. Provide one of:
+- set `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `NVIDIA_API_KEY` in the MCP server env
 
-- **`fetch_project_context`** — scans your Cursor and Claude Code transcripts for the current project, summarizes new ones, and returns a compact index of what's available
-- **`get_project_context`** — loads the full content of selected summaries into Claude's context
-- **`search_context`** — searches across summaries for a keyword or phrase
+---
 
-The typical flow is: Claude calls `fetch_project_context` to see what memory is available, then calls `get_project_context` with the relevant ids to load it. Summaries are stored in `<project>/ContextPool/` alongside your code.
+## Authentication
 
-## Initialize memory for current directory (Cursor-only flow)
+`cxp` tries backends in this order and uses the first one available:
 
-Run this from inside your project directory.
+| Priority | Backend | How to enable |
+|----------|---------|---------------|
+| 1 | `claude` CLI | Install Claude Code or `npm i -g @anthropic-ai/claude-code`. No key needed. |
+| 2 | Anthropic API | Set `ANTHROPIC_API_KEY` |
+| 3 | OpenAI API | Set `OPENAI_API_KEY` |
+| 4 | NVIDIA NIM | Set `NVIDIA_API_KEY`, or run any `cxp` command interactively to be prompted (key is saved to system keychain) |
 
-- If you provide **Cursor chat ids** (typically the transcript filename without `.jsonl`), it summarizes only those.
-- If you provide **no chat ids**, it summarizes **all** chats for the current project.
-
+To reset a saved NVIDIA key:
 ```bash
-./target/release/cxp init cursor <chat-id> <chat-id> ...
+cxp --reset-nvidia-api-key
 ```
 
-Summarize everything for the project:
+---
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ANTHROPIC_API_KEY` | — | Anthropic API key (backend priority 2) |
+| `OPENAI_API_KEY` | — | OpenAI API key (backend priority 3) |
+| `NVIDIA_API_KEY` | — | NVIDIA NIM API key (backend priority 4) |
+| `MODEL` | per-backend default¹ | Override the model used for summarization |
+| `REPAIR_MODEL` | same as `MODEL` | Model used for the JSON repair pass if the first response is malformed |
+| `TEMPERATURE` | `0.0` | Sampling temperature |
+| `TOP_P` | `0.95` | Top-p sampling |
+| `MAX_COMPLETION_TOKENS` | `4096` | Max tokens in the LLM response |
+| `SANITIZE_CHAT` | `1` | Strip `<think>` blocks, tool calls, and markdown fences before sending to LLM (`0` to disable) |
+| `EXTRACT_USER_QUERIES_ONLY` | `0` | Send only user messages to the LLM, not assistant replies (`1` to enable) |
+| `DEBUG_LLM_OUTPUT` | `0` | Print raw LLM output to stderr before parsing (`1` to enable) |
+
+¹ Default models by backend:
+- Claude Code CLI / Anthropic: `claude-haiku-4-5-20251001`
+- OpenAI: `gpt-4o-mini`
+- NVIDIA: `qwen/qwen3.5-122b-a10b`
+
+---
+
+## CLI Reference
+
+### `cxp init cursor [chat-ids...] [OPTIONS]`
+
+Initialize memory for the current directory from Cursor transcripts.
 
 ```bash
-./target/release/cxp init cursor
+cxp init cursor                          # summarize all Cursor chats for this project
+cxp init cursor <id1> <id2>             # summarize specific chat ids
+cxp init cursor --local                  # store summaries in ./ContextPool/ instead of app data dir
+cxp init cursor --out ./store           # custom output directory
+cxp init cursor --cursor-dir ~/.cursor2  # custom Cursor root
 ```
 
-This creates a centralized store under your OS local app data dir:
-- macOS: `~/Library/Application Support/ContextPool/projects/<project-id>/`
+### `cxp init claude-code [session-ids...] [OPTIONS]`
 
-Then it summarizes only those Cursor transcripts for that project id into:
-- `.../imports/cursor/<timestamp>/`
-
-You can override the centralized store location:
+Initialize memory for the current directory from Claude Code sessions.
 
 ```bash
-./target/release/cxp init cursor <chat-id> --out ./contextpool-store
+cxp init claude-code                     # summarize all sessions for this project
+cxp init claude-code <id1> <id2>        # summarize specific session ids
+cxp init claude-code --local             # store summaries in ./ContextPool/
+cxp init claude-code --out ./store      # custom output directory
+cxp init claude-code --claude-dir ~/.claude2
 ```
 
-Or store everything locally under the current working directory:
+### `cxp export cursor [OPTIONS]`
+
+Bulk export all Cursor transcripts from `~/.cursor`.
 
 ```bash
-./target/release/cxp init cursor --local
+cxp export cursor                        # scan and summarize all Cursor transcripts
+cxp export cursor --offline              # store placeholder summaries (no LLM call)
+cxp export cursor --transcript <path>    # export a single .jsonl file
+cxp export cursor --out ./out            # custom output directory
+cxp export cursor --cursor-dir <path>    # custom Cursor root
 ```
 
-This writes:
-- centralized store: `./ContextPool/projects/<project-id>/`
-- summaries: `./ContextPool/projects/<project-id>/imports/cursor/<timestamp>/`
+### `cxp export claude-code [OPTIONS]`
 
-## Export Cursor chats (debug / bulk export)
-
-Scans common Cursor transcript locations under `~/.cursor`:
-- `~/.cursor/agent-transcripts/**/*.jsonl`
-- `~/.cursor/projects/**/agent-transcripts/**/*.jsonl`
+Bulk export all Claude Code sessions from `~/.claude/projects`.
 
 ```bash
-./target/release/cxp export cursor --offline
+cxp export claude-code
+cxp export claude-code --offline
+cxp export claude-code --session <path>  # export a single .jsonl session file
+cxp export claude-code --out ./out
+cxp export claude-code --claude-dir <path>
 ```
 
-Note: In offline mode, the CLI stores only a short placeholder summary (it does **not** persist raw transcript contents).
+### `cxp export vscdb [OPTIONS]`
 
-Export a **single Cursor transcript file** (useful when you already know the path, on macOS or Windows):
+Export chat history from VS Code-style `state.vscdb` workspace storage (Cursor, Windsurf, and other forks).
 
 ```bash
-./target/release/cxp export cursor --offline --transcript "/path/to/<session>.jsonl"
+cxp export vscdb --offline --product Cursor
+cxp export vscdb --offline --product Windsurf --workspace-storage "<path>"
 ```
 
-By default, exports are written under your OS local app data dir:
-- macOS: `~/Library/Application Support/ContextPool/exports/<timestamp>/`
+Default workspace storage paths:
+- macOS (Cursor): `~/Library/Application Support/Cursor/User/workspaceStorage`
+- Windows (Cursor): `%APPDATA%\Cursor\User\workspaceStorage`
 
-Override output directory:
+### `cxp export kiro [OPTIONS]`
+
+Export a Kiro session saved via `/chat save <path>`.
 
 ```bash
-./target/release/cxp export cursor --offline --out ./out
+cxp export kiro --chat-json ./kiro-session.json
+cxp export kiro --offline --chat-json ./kiro-session.json
 ```
 
-## Export Cursor chats (using your API)
+### `cxp mcp [OPTIONS]`
 
-This CLI will call your running `context-generator-agent`:
-- `POST <API_BASE>/generate-context`
-- JSON body: `{ "chat": "<extracted transcript text>", "files": [], "repo_type": "" }`
-- Expected JSON response: a JSON array of 0–5 context items
+Start the MCP server (used by Claude Code / Cursor config, not usually called directly).
 
 ```bash
-export CONTEXT_POOL_API_BASE="https://your-service.example"
-./target/release/cxp export cursor
+cxp mcp
+cxp mcp --data-dir ./ContextPool   # custom data directory
 ```
 
-If the API call fails, the CLI falls back to an offline summary.
+---
 
-## Export VS Code-style chat history (`state.vscdb`)
+## Data Storage
 
-Many VS Code-based editors (Cursor and similar forks) store chat state in SQLite DBs named `state.vscdb` under a `workspaceStorage` directory.
+Summaries are stored in `<project>/ContextPool/` by default (next to your code). The `--local` and `--out` flags on `init` commands, and `--out` on `export` commands, let you override this.
 
-This command scans `workspaceStorage/**/state.vscdb`, extracts a few known AI-chat keys, and summarizes what it finds:
-
-```bash
-./target/release/cxp export vscdb --offline --product Cursor
-```
-
-Override the storage location explicitly (recommended if your editor uses a different product name):
-
-- **Windows (Cursor)**: `%APPDATA%\Cursor\User\workspaceStorage`
-- **macOS (Cursor)**: `~/Library/Application Support/Cursor/User/workspaceStorage`
-
-```bash
-./target/release/cxp export vscdb --offline --product Cursor --workspace-storage "C:\\Users\\<you>\\AppData\\Roaming\\Cursor\\User\\workspaceStorage"
-```
-
-For **Windsurf** or other VS Code forks, try:
-
-```bash
-./target/release/cxp export vscdb --offline --product Windsurf --workspace-storage "<their workspaceStorage path>"
-```
-
-## Export Kiro chats
-
-Kiro can export the current session to a JSON file via `/chat save <path>` (or the equivalent in their CLI). Once you have that JSON file:
-
-```bash
-./target/release/cxp export kiro --offline --chat-json ./kiro-session.json
-```
-
+The MCP server's `fetch_project_context` tool always writes to `<project>/ContextPool/fetched/<timestamp>/`.
