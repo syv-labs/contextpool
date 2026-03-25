@@ -263,11 +263,14 @@ pub fn sanitize_chat_text(text: &str, extract_user_queries_only: bool) -> String
         .replace_all(&t, "")
         .to_string();
 
-    // Drop common XML-ish blocks
+    // Drop common XML-ish blocks (injected context and editor artifacts)
     for pat in [
         r"(?is)<attached_files>[\s\S]*?</attached_files>",
         r"(?is)<code_selection[\s\S]*?</code_selection>",
         r"(?is)<terminal_selection[\s\S]*?</terminal_selection>",
+        r"(?is)<ide_opened_file[\s\S]*?</ide_opened_file>",
+        r"(?is)<environment_details[\s\S]*?</environment_details>",
+        r"(?is)<system>[\s\S]*?</system>",
     ] {
         t = Regex::new(pat).unwrap().replace_all(&t, "").to_string();
     }
@@ -294,6 +297,13 @@ pub fn sanitize_chat_text(text: &str, extract_user_queries_only: bool) -> String
         .replace_all(&t, "")
         .to_string();
     t = t.replace("```", "");
+
+    // Drop lines that are likely raw file content (very long, no spaces typical of code dumps)
+    t = t
+        .lines()
+        .filter(|l| l.len() <= 500)
+        .collect::<Vec<_>>()
+        .join("\n");
 
     // Collapse excessive blank lines
     t = Regex::new(r"\n{3,}").unwrap().replace_all(&t, "\n\n").to_string();

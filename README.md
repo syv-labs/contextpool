@@ -149,7 +149,6 @@ Bulk export all Cursor transcripts from `~/.cursor`.
 
 ```bash
 cxp export cursor                        # scan and summarize all Cursor transcripts
-cxp export cursor --offline              # store placeholder summaries (no LLM call)
 cxp export cursor --transcript <path>    # export a single .jsonl file
 cxp export cursor --out ./out            # custom output directory
 cxp export cursor --cursor-dir <path>    # custom Cursor root
@@ -161,7 +160,6 @@ Bulk export all Claude Code sessions from `~/.claude/projects`.
 
 ```bash
 cxp export claude-code
-cxp export claude-code --offline
 cxp export claude-code --session <path>  # export a single .jsonl session file
 cxp export claude-code --out ./out
 cxp export claude-code --claude-dir <path>
@@ -172,8 +170,8 @@ cxp export claude-code --claude-dir <path>
 Export chat history from VS Code-style `state.vscdb` workspace storage (Cursor, Windsurf, and other forks).
 
 ```bash
-cxp export vscdb --offline --product Cursor
-cxp export vscdb --offline --product Windsurf --workspace-storage "<path>"
+cxp export vscdb --product Cursor
+cxp export vscdb --product Windsurf --workspace-storage "<path>"
 ```
 
 Default workspace storage paths:
@@ -186,7 +184,6 @@ Export a Kiro session saved via `/chat save <path>`.
 
 ```bash
 cxp export kiro --chat-json ./kiro-session.json
-cxp export kiro --offline --chat-json ./kiro-session.json
 ```
 
 ### `cxp mcp [OPTIONS]`
