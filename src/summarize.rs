@@ -9,53 +9,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{credentials::{ensure_nvidia_api_key_interactive, load_api_backend, ApiBackend}, embedded_agent};
-
-fn redact_secrets(text: &str) -> String {
-    // Keep this intentionally simple and conservative: prefer false-positives over leaking secrets.
-    // We redact common patterns found in terminal transcripts and env exports.
-    let mut out = String::with_capacity(text.len());
-    for line in text.lines() {
-        let l = line.trim_end();
-
-        // export FOO=... / export FOO="..." / export FOO='...'
-        if let Some(rest) = l.strip_prefix("export ") {
-            if let Some((k, _v)) = rest.split_once('=') {
-                let key = k.trim();
-                if key.ends_with("_KEY")
-                    || key.ends_with("_TOKEN")
-                    || key.ends_with("_SECRET")
-                    || key.contains("API_KEY")
-                    || key.contains("TOKEN")
-                    || key.contains("SECRET")
-                {
-                    out.push_str(&format!("export {}=[REDACTED]\n", key));
-                    continue;
-                }
-            }
-        }
-
-        // Inline env assignments: FOO=... or FOO="..." (common in multi-line command invocations)
-        if let Some((k, _v)) = l.split_once('=') {
-            let key = k.trim();
-            if !key.contains(' ') // avoid catching arbitrary log lines
-                && (key.ends_with("_KEY")
-                    || key.ends_with("_TOKEN")
-                    || key.ends_with("_SECRET")
-                    || key.contains("API_KEY")
-                    || key.contains("TOKEN")
-                    || key.contains("SECRET"))
-            {
-                out.push_str(&format!("{}=[REDACTED]\n", key));
-                continue;
-            }
-        }
-
-        out.push_str(l);
-        out.push('\n');
-    }
-    out
-}
+use crate::{credentials::{ensure_nvidia_api_key_interactive, load_api_backend, ApiBackend}, embedded_agent, redact::redact_secrets};
 
 pub fn fallback_summary(text: &str) -> String {
     let redacted = redact_secrets(text);

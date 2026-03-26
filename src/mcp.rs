@@ -62,20 +62,24 @@ impl ContextPoolServer {
         let backend = match crate::credentials::load_api_backend() {
             Some(b) => b,
             None => {
-                return "No API key configured. \
-                    Set ANTHROPIC_API_KEY (preferred when running inside Claude Code / Cursor) \
-                    or NVIDIA_API_KEY, or run `cxp export cursor` once from a terminal \
-                    to save the NVIDIA key to the system keychain."
+                return "No summarization backend available.\n\n\
+                    Inside Claude Code: this should work automatically (uses `claude` CLI).\n\
+                    If it doesn't, ensure the `claude` binary is in your PATH.\n\n\
+                    Inside Cursor: set one of these env vars in your MCP config:\n\
+                    ANTHROPIC_API_KEY, OPENAI_API_KEY, or NVIDIA_API_KEY"
                     .to_string()
             }
         };
+
+        // Tier 8: Clean stale index entries where summary files were deleted
+        clean_stale_index_entries(&proj_dir);
 
         // Collect transcript files not yet indexed
         let already_indexed = collect_indexed_source_paths(&proj_dir);
         let new_files = discover_new_transcripts(&path, &project_id, &already_indexed);
 
         if new_files.is_empty() {
-            return format_context_index(&proj_dir, 0);
+            return format_context_index(&proj_dir, 0, 0, 0);
         }
 
         // Summarize new transcripts
@@ -90,6 +94,10 @@ impl ContextPoolServer {
 
         let mut index_entries: Vec<serde_json::Value> = Vec::new();
         let mut imported = 0;
+        let mut failed = 0;
+        let mut skipped = 0;
+        let mut errors: Vec<String> = Vec::new();
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
 
         for transcript_path in &new_files {
             let Ok(raw) = std::fs::read_to_string(transcript_path) else {
@@ -97,23 +105,33 @@ impl ContextPoolServer {
             };
             let extracted = crate::transcript::extract_text_from_jsonl(&raw);
 
+            // Tier 5: Skip tiny transcripts
+            if extracted.len() < 100 {
+                skipped += 1;
+                // Mark as indexed so we don't keep re-discovering empty files
+                index_entries.push(serde_json::json!({
+                    "source_path": transcript_path.to_string_lossy(),
+                    "output_path": null,
+                    "chars_in": extracted.len(),
+                    "skipped": "too short",
+                }));
+                continue;
+            }
+
             let (items, _) =
                 match crate::embedded_agent::generate_context_items(&extracted, &[], "", &opts)
                     .await
                 {
                     Ok(r) => r,
-                    Err(_) => {
-                        // Mark as indexed so we don't retry indefinitely
-                        index_entries.push(serde_json::json!({
-                            "source_path": transcript_path.to_string_lossy(),
-                            "output_path": null,
-                            "chars_in": extracted.len(),
-                        }));
+                    Err(e) => {
+                        // Tier 1: Do NOT mark as indexed — will retry on next fetch
+                        failed += 1;
+                        errors.push(format!("{}", e));
                         continue;
                     }
                 };
 
-            // Always mark as indexed regardless of whether we got insights
+            // No insights extracted — mark indexed (LLM succeeded, just nothing to report)
             if items.is_empty() {
                 index_entries.push(serde_json::json!({
                     "source_path": transcript_path.to_string_lossy(),
@@ -130,12 +148,29 @@ impl ContextPoolServer {
                 .to_string();
             let out_file = run_dir.join(format!("{safe_name}.summary.md"));
 
+            // Tier 4: Add metadata & attribution
+            let source_ide = if transcript_path
+                .to_string_lossy()
+                .contains(".claude/projects")
+            {
+                "Claude Code"
+            } else if transcript_path.to_string_lossy().contains(".cursor/") {
+                "Cursor"
+            } else {
+                "Unknown"
+            };
+
             let summary_md = items_to_markdown(&items);
             let _ = std::fs::write(
                 &out_file,
                 format!(
-                    "# Summary\n\n{}\n\n## Source\n- `{}`\n",
-                    summary_md,
+                    "# Summary\n\n\
+                     ## Metadata\n\
+                     - **Source:** {source_ide} session\n\
+                     - **Session:** {safe_name}\n\
+                     - **Indexed:** {now}\n\n\
+                     {summary_md}\n\n\
+                     ## Source\n- `{}`\n",
                     transcript_path.display()
                 ),
             );
@@ -148,13 +183,28 @@ impl ContextPoolServer {
             imported += 1;
         }
 
-        let index_path = run_dir.join("index.json");
-        let _ = std::fs::write(
-            &index_path,
-            serde_json::to_string_pretty(&index_entries).unwrap_or_default(),
-        );
+        if !index_entries.is_empty() {
+            let index_path = run_dir.join("index.json");
+            let _ = std::fs::write(
+                &index_path,
+                serde_json::to_string_pretty(&index_entries).unwrap_or_default(),
+            );
+        }
 
-        format_context_index(&proj_dir, imported)
+        let mut result = format_context_index(&proj_dir, imported, failed, skipped);
+
+        // Tier 1: Surface errors
+        if !errors.is_empty() {
+            result.push_str("\n\nErrors:\n");
+            for (i, e) in errors.iter().enumerate().take(5) {
+                result.push_str(&format!("{}. {}\n", i + 1, e));
+            }
+            if errors.len() > 5 {
+                result.push_str(&format!("  ...and {} more\n", errors.len() - 5));
+            }
+        }
+
+        result
     }
 
     fn get_project_context_impl(
@@ -380,6 +430,40 @@ fn resolve_project_path(project_path: Option<String>) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// Tier 8: Remove index entries where the summary file was deleted,
+/// so those transcripts get re-processed on the next fetch.
+fn clean_stale_index_entries(proj_dir: &Path) {
+    for entry in WalkDir::new(proj_dir).follow_links(false) {
+        let Ok(e) = entry else { continue };
+        if !e.file_type().is_file() || e.file_name().to_str() != Some("index.json") {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(e.path()) else {
+            continue;
+        };
+        let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&content) else {
+            continue;
+        };
+        let original_len = arr.len();
+        let cleaned: Vec<&serde_json::Value> = arr
+            .iter()
+            .filter(|item| {
+                // Keep entries with no output_path (no insights / skipped) — they're valid
+                match item["output_path"].as_str() {
+                    Some(p) => Path::new(p).exists(),
+                    None => true,
+                }
+            })
+            .collect();
+        if cleaned.len() < original_len {
+            let _ = std::fs::write(
+                e.path(),
+                serde_json::to_string_pretty(&cleaned).unwrap_or_default(),
+            );
+        }
+    }
+}
+
 /// Walk all `index.json` files under `proj_dir` and collect every source_path
 /// that has already been processed, so we don't re-summarize on future calls.
 fn collect_indexed_source_paths(proj_dir: &Path) -> HashSet<String> {
@@ -498,7 +582,12 @@ fn items_to_markdown(items: &[ContextItem]) -> String {
 }
 
 /// Build the compact index string that `fetch_project_context` returns.
-fn format_context_index(proj_dir: &Path, newly_imported: usize) -> String {
+fn format_context_index(
+    proj_dir: &Path,
+    newly_imported: usize,
+    failed: usize,
+    skipped: usize,
+) -> String {
     let mut entries: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
 
     for entry in WalkDir::new(proj_dir).follow_links(false).sort_by_file_name() {
@@ -522,18 +611,34 @@ fn format_context_index(proj_dir: &Path, newly_imported: usize) -> String {
         entries.push((id, titles, tags));
     }
 
+    // Tier 2: Helpful empty-state message
     if entries.is_empty() {
-        return "No transcripts found for this project in Cursor or Claude Code.".to_string();
+        return "No transcripts found for this project.\n\n\
+                ContextPool looks for transcripts in:\n\
+                \u{2022} Claude Code: ~/.claude/projects/<project>/\n\
+                \u{2022} Cursor: ~/.cursor/projects/<project>/agent-transcripts/\n\n\
+                Start a coding session in either tool and they'll appear here automatically."
+            .to_string();
     }
 
-    let header = if newly_imported > 0 {
-        format!("Indexed {} new session(s). ", newly_imported)
-    } else {
-        "All sessions already indexed. ".to_string()
-    };
+    // Build status line
+    let mut parts: Vec<String> = Vec::new();
+    if newly_imported > 0 {
+        parts.push(format!("Indexed {} new session(s)", newly_imported));
+    }
+    if failed > 0 {
+        parts.push(format!("{} failed (will retry next fetch)", failed));
+    }
+    if skipped > 0 {
+        parts.push(format!("{} skipped (too short)", skipped));
+    }
+    if parts.is_empty() {
+        parts.push("All sessions already indexed".to_string());
+    }
+    let header = parts.join(". ");
 
     let mut out = format!(
-        "{}{} summaries available. \
+        "{}. {} summaries available.\n\
          Call get_project_context with the ids you want to load:\n\n",
         header,
         entries.len()
@@ -628,7 +733,10 @@ fn collect_summaries_by_ids(proj_dir: &Path, ids: &[String]) -> String {
         let path = proj_dir.join(&relative);
         match std::fs::read_to_string(&path) {
             Ok(content) => out.push(content.trim().to_string()),
-            Err(_) => out.push(format!("(summary not found: {})", id)),
+            Err(_) => out.push(format!(
+                "(summary not found: {})\nHint: call fetch_project_context first to see available summary IDs.",
+                id
+            )),
         }
     }
     if out.is_empty() {
@@ -642,8 +750,18 @@ fn search_summaries(root: &Path, query: &str) -> String {
     if query.trim().is_empty() {
         return "Please provide a non-empty search query.".to_string();
     }
-    let q = query.to_lowercase();
-    let mut hits: Vec<String> = Vec::new();
+
+    let terms: Vec<String> = query
+        .to_lowercase()
+        .split_whitespace()
+        .map(String::from)
+        .collect();
+    if terms.is_empty() {
+        return "Please provide a non-empty search query.".to_string();
+    }
+
+    // Collect (match_count, formatted_hit) tuples for ranking
+    let mut hits: Vec<(usize, String)> = Vec::new();
 
     for entry in WalkDir::new(root).follow_links(false) {
         let Ok(e) = entry else { continue };
@@ -656,22 +774,63 @@ fn search_summaries(root: &Path, query: &str) -> String {
         let Ok(content) = std::fs::read_to_string(e.path()) else {
             continue;
         };
-        let matching: Vec<&str> = content
-            .lines()
-            .filter(|l| l.to_lowercase().contains(&q))
-            .collect();
-        if !matching.is_empty() {
-            hits.push(format!(
-                "**{}**\n{}",
-                e.path().display(),
-                matching
-                    .iter()
-                    .map(|l| format!("  {}", l.trim()))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            ));
+
+        let content_lower = content.to_lowercase();
+
+        // ALL terms must appear somewhere in the file
+        let matched_terms = terms
+            .iter()
+            .filter(|t| content_lower.contains(t.as_str()))
+            .count();
+        if matched_terms < terms.len() {
+            continue;
         }
+
+        // Extract matching insight blocks (lines starting with "- **")
+        let matching_blocks: Vec<&str> = content
+            .lines()
+            .filter(|l| {
+                let lower = l.to_lowercase();
+                terms.iter().any(|t| lower.contains(t.as_str()))
+            })
+            .filter(|l| {
+                let t = l.trim();
+                t.starts_with("- **") || t.starts_with("- tags:") || t.starts_with("- file:")
+            })
+            .collect();
+
+        let id = e
+            .path()
+            .strip_prefix(root)
+            .unwrap_or(e.path())
+            .to_string_lossy()
+            .to_string();
+
+        let block_text = if matching_blocks.is_empty() {
+            // Fallback: show first few matching lines
+            content
+                .lines()
+                .filter(|l| {
+                    let lower = l.to_lowercase();
+                    terms.iter().any(|t| lower.contains(t.as_str()))
+                })
+                .take(5)
+                .map(|l| format!("  {}", l.trim()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            matching_blocks
+                .iter()
+                .map(|l| format!("  {}", l.trim()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        hits.push((matched_terms, format!("**{}**\n{}", id, block_text)));
     }
+
+    // Sort by number of matched terms (descending)
+    hits.sort_by(|a, b| b.0.cmp(&a.0));
 
     if hits.is_empty() {
         format!("No matches found for '{query}'.")
@@ -679,7 +838,10 @@ fn search_summaries(root: &Path, query: &str) -> String {
         format!(
             "Found {} match(es) for '{query}':\n\n{}",
             hits.len(),
-            hits.join("\n\n")
+            hits.iter()
+                .map(|(_, text)| text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n")
         )
     }
 }

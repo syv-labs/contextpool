@@ -6,6 +6,9 @@
 ///
 /// For both schemas only human-readable text turns are kept.
 /// Thinking blocks, tool calls/results, file snapshots, progress events, etc. are dropped.
+/// Maximum extracted text size (~100KB). Transcripts beyond this are truncated.
+const MAX_EXTRACTED_BYTES: usize = 100_000;
+
 pub fn extract_text_from_jsonl(jsonl: &str) -> String {
     let mut out = String::new();
     for line in jsonl.lines() {
@@ -23,6 +26,13 @@ pub fn extract_text_from_jsonl(jsonl: &str) -> String {
             out.push_str(&text);
         }
         // Unknown format: skip entirely rather than dumping raw JSON noise
+
+        // Cap to prevent memory issues with very large sessions
+        if out.len() > MAX_EXTRACTED_BYTES {
+            out.truncate(MAX_EXTRACTED_BYTES);
+            out.push_str("\n\n[transcript truncated]\n");
+            break;
+        }
     }
     out
 }

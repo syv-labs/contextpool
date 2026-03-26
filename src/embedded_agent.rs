@@ -416,7 +416,7 @@ async fn call_chat(
     top_p: f32,
     max_tokens: u32,
 ) -> Result<String> {
-    match backend {
+    let result = match backend {
         ApiBackend::ClaudeCodeCli => call_claude_cli(system, user).await,
         ApiBackend::Anthropic(key) => {
             call_anthropic_chat(client, key, model, system, user, max_tokens).await
@@ -427,7 +427,43 @@ async fn call_chat(
         ApiBackend::Nvidia(key) => {
             call_nvidia_chat(client, key, model, system, user, temperature, top_p, max_tokens).await
         }
+    };
+
+    // One retry on transient errors (429, 5xx, network)
+    match result {
+        Ok(v) => Ok(v),
+        Err(e) if is_transient_error(&e) => {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            match backend {
+                ApiBackend::ClaudeCodeCli => call_claude_cli(system, user).await,
+                ApiBackend::Anthropic(key) => {
+                    call_anthropic_chat(client, key, model, system, user, max_tokens).await
+                }
+                ApiBackend::OpenAI(key) => {
+                    call_openai_chat(client, key, model, system, user, temperature, top_p, max_tokens).await
+                }
+                ApiBackend::Nvidia(key) => {
+                    call_nvidia_chat(client, key, model, system, user, temperature, top_p, max_tokens).await
+                }
+            }
+        }
+        Err(e) => Err(e),
     }
+}
+
+/// Check if an error looks transient (rate limit, server error, network).
+fn is_transient_error(err: &anyhow::Error) -> bool {
+    let msg = err.to_string();
+    // HTTP status codes that are transient
+    for code in ["429", "500", "502", "503", "504"] {
+        if msg.contains(code) {
+            return true;
+        }
+    }
+    // Network errors
+    msg.contains("timed out")
+        || msg.contains("connection")
+        || msg.contains("request failed")
 }
 
 async fn call_anthropic_chat(
@@ -555,7 +591,14 @@ pub async fn generate_context_items(
         chat = sanitize_chat_text(&chat, opts.extract_user_queries_only);
     }
 
-    let client = reqwest::Client::new();
+    let timeout = match &opts.backend {
+        ApiBackend::ClaudeCodeCli => std::time::Duration::from_secs(120),
+        _ => std::time::Duration::from_secs(30),
+    };
+    let client = reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
     let user = user_prompt(&chat, files, repo_type);
 
     let raw = call_chat(&client, &opts.backend, &opts.model, SYSTEM_PROMPT, &user, opts.temperature, opts.top_p, opts.max_completion_tokens).await?;
