@@ -1,6 +1,26 @@
 # ContextPool (`cxp`)
 
-A per-project memory store that extracts engineering insights from your local IDE/agent chat transcripts (Cursor, Claude Code, Kiro, VS Code forks) and exposes them via an MCP server. Works inside Claude Code and Cursor with no API key required.
+Your AI agent forgets everything between sessions. You debug the same bug twice. You re-explain architecture decisions you already made. You lose fixes that took an hour to find.
+
+**ContextPool fixes that.** It reads your past Cursor and Claude Code sessions, extracts the engineering insights (bugs found, root causes, design decisions, gotchas), and feeds them back to your agent automatically — so it never re-discovers what you already know.
+
+```
+$ cxp init claude-code --local
+
+  Found 14 Claude Code session(s) for this project.
+  Summarized 14 session(s) -> 47 insight(s) extracted.
+
+  Top insights:
+    bug: ESM import fails silently in test runner — add "type": "module" to package.json
+    decision: chose SQLite over Postgres for local-only storage
+    gotcha: reqwest needs rustls-tls feature, not default openssl
+
+  Your agent will now recall these automatically via MCP.
+```
+
+**Zero config in Claude Code.** No API key needed — it uses your existing auth.
+
+---
 
 ## Install
 

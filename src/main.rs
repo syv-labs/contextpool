@@ -6,6 +6,7 @@ mod init;
 mod mcp;
 mod paths;
 mod project;
+mod redact;
 mod summarize;
 mod transcript;
 
