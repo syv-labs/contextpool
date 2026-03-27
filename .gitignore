@@ -22,6 +22,12 @@ rust-project.json
 ## Logs / misc
 *.log
 
+## Local ContextPool data (generated at runtime)
+ContextPool/
+
+## Server (lives in separate private repo)
+cxp-server/
+
 ## Environment / secrets (keep examples committed separately)
 .env
 .env.*

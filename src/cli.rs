@@ -22,6 +22,62 @@ pub enum Command {
 
     /// Start the MCP server so Claude Code can query stored context
     Mcp(McpArgs),
+
+    /// Authenticate with a team for cloud sync
+    Auth(AuthArgs),
+
+    /// Push local insights to the team cloud
+    Push(PushArgs),
+
+    /// Pull team insights from the cloud to local cache
+    Pull(PullArgs),
+
+    /// Show team info and projects
+    Team(TeamArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct AuthArgs {
+    /// Team API key (e.g., cxp_team_abc123). Omit to check status.
+    pub api_key: Option<String>,
+
+    /// Show current auth status
+    #[arg(long)]
+    pub status: bool,
+
+    /// Remove stored team API key
+    #[arg(long)]
+    pub logout: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct PushArgs {
+    /// Show what would be pushed without pushing
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Push all local projects (not just the current directory)
+    #[arg(long)]
+    pub all: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct PullArgs {
+    /// Pull all team projects (not just the current directory)
+    #[arg(long)]
+    pub all: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct TeamArgs {
+    #[command(subcommand)]
+    pub action: Option<TeamAction>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TeamAction {
+    /// List all projects in the team cloud
+    Projects,
 }
 
 #[derive(Parser, Debug)]

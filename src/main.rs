@@ -1,4 +1,5 @@
 mod cli;
+mod cloud;
 mod credentials;
 mod embedded_agent;
 mod export;
@@ -8,6 +9,7 @@ mod paths;
 mod project;
 mod redact;
 mod summarize;
+mod team;
 mod transcript;
 
 use anyhow::Result;
@@ -34,5 +36,9 @@ async fn main() -> Result<()> {
             ExportSource::Kiro(args) => export::kiro::export_kiro(args).await,
         },
         Command::Mcp(McpArgs { data_dir }) => mcp::run_server(data_dir).await,
+        Command::Auth(args) => team::cmd_auth(args).await,
+        Command::Push(args) => team::cmd_push(args).await,
+        Command::Pull(args) => team::cmd_pull(args).await,
+        Command::Team(args) => team::cmd_team(args).await,
     }
 }
