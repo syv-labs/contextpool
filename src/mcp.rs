@@ -746,6 +746,38 @@ fn collect_summaries_by_ids(proj_dir: &Path, ids: &[String]) -> String {
     }
 }
 
+/// Groups lines of a summary file into insight blocks.
+/// Each block is the `- **type** title — summary` line plus any immediately
+/// following `  - file:` / `  - tags:` child lines.
+fn extract_insight_blocks(content: &str) -> Vec<String> {
+    let mut blocks: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+
+    for line in content.lines() {
+        let t = line.trim();
+        if t.starts_with("- **") {
+            if let Some(block) = current.take() {
+                blocks.push(block);
+            }
+            current = Some(format!("  {}", t));
+        } else if t.starts_with("- tags:") || t.starts_with("- file:") {
+            if let Some(ref mut block) = current {
+                block.push('\n');
+                block.push_str(&format!("    {}", t));
+            }
+        } else if current.is_some() && !t.is_empty() {
+            // Non-child, non-blank line ends the current block
+            if let Some(block) = current.take() {
+                blocks.push(block);
+            }
+        }
+    }
+    if let Some(block) = current {
+        blocks.push(block);
+    }
+    blocks
+}
+
 fn search_summaries(root: &Path, query: &str) -> String {
     if query.trim().is_empty() {
         return "Please provide a non-empty search query.".to_string();
@@ -760,8 +792,8 @@ fn search_summaries(root: &Path, query: &str) -> String {
         return "Please provide a non-empty search query.".to_string();
     }
 
-    // Collect (match_count, formatted_hit) tuples for ranking
-    let mut hits: Vec<(usize, String)> = Vec::new();
+    // (match_count, full_match, formatted_hit)
+    let mut hits: Vec<(usize, bool, String)> = Vec::new();
 
     for entry in WalkDir::new(root).follow_links(false) {
         let Ok(e) = entry else { continue };
@@ -777,26 +809,26 @@ fn search_summaries(root: &Path, query: &str) -> String {
 
         let content_lower = content.to_lowercase();
 
-        // ALL terms must appear somewhere in the file
+        // At least one term must appear; rank by how many terms match
         let matched_terms = terms
             .iter()
             .filter(|t| content_lower.contains(t.as_str()))
             .count();
-        if matched_terms < terms.len() {
+        if matched_terms == 0 {
             continue;
         }
+        let full_match = matched_terms == terms.len();
 
-        // Extract matching insight blocks (lines starting with "- **")
-        let matching_blocks: Vec<&str> = content
-            .lines()
-            .filter(|l| {
-                let lower = l.to_lowercase();
+        // Extract full insight blocks; include a block if any of its lines
+        // contain at least one search term
+        let all_blocks = extract_insight_blocks(&content);
+        let matching_blocks: Vec<&str> = all_blocks
+            .iter()
+            .filter(|block| {
+                let lower = block.to_lowercase();
                 terms.iter().any(|t| lower.contains(t.as_str()))
             })
-            .filter(|l| {
-                let t = l.trim();
-                t.starts_with("- **") || t.starts_with("- tags:") || t.starts_with("- file:")
-            })
+            .map(String::as_str)
             .collect();
 
         let id = e
@@ -819,18 +851,19 @@ fn search_summaries(root: &Path, query: &str) -> String {
                 .collect::<Vec<_>>()
                 .join("\n")
         } else {
-            matching_blocks
-                .iter()
-                .map(|l| format!("  {}", l.trim()))
-                .collect::<Vec<_>>()
-                .join("\n")
+            matching_blocks.join("\n")
         };
 
-        hits.push((matched_terms, format!("**{}**\n{}", id, block_text)));
+        let label = if full_match { "" } else { " *(partial)*" };
+        hits.push((
+            matched_terms,
+            full_match,
+            format!("**{}**{}\n{}", id, label, block_text),
+        ));
     }
 
-    // Sort by number of matched terms (descending)
-    hits.sort_by(|a, b| b.0.cmp(&a.0));
+    // Full matches first, then by matched_terms descending
+    hits.sort_by(|a, b| b.1.cmp(&a.1).then(b.0.cmp(&a.0)));
 
     if hits.is_empty() {
         format!("No matches found for '{query}'.")
@@ -839,7 +872,7 @@ fn search_summaries(root: &Path, query: &str) -> String {
             "Found {} match(es) for '{query}':\n\n{}",
             hits.len(),
             hits.iter()
-                .map(|(_, text)| text.as_str())
+                .map(|(_, _, text)| text.as_str())
                 .collect::<Vec<_>>()
                 .join("\n\n")
         )
