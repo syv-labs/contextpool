@@ -48,10 +48,10 @@ PROCESS (perform internally, do not output steps):
    - conversational fluff
 
 5. Compress:
-   - Each insight MUST be <= 200 characters
+   - Each insight MUST be <= 400 characters
 
 OUTPUT REQUIREMENTS:
-- Max 5 objects
+- Max 10 objects
 - If no strong insights exist, return []
 - Output must be a JSON ARRAY (list). Not an object/dict.
 - Do not wrap the JSON in Markdown fences (no ```).
@@ -59,13 +59,19 @@ OUTPUT REQUIREMENTS:
 - Allowed keys per object: type, title, summary, tags, file. No other keys.
 - If you are about to output anything other than a JSON array of objects with the allowed keys, output [] instead.
 
+TAGS REQUIREMENTS:
+- Each insight MUST have 5-10 tags; add more if the insight warrants it
+- Tags should cover: language, framework, library, component/module, error type, concept, pattern, file type
+- Use specific tags (e.g. "tokio-runtime", "lifetime-borrow") not generic ones (e.g. "rust", "error")
+- Include both broad category tags and narrow specific tags
+
 EXAMPLE (shape only; content will differ):
 [
   {
     "type": "bug",
     "title": "Fix ESM vs CJS mismatch",
     "summary": "Add \"type\": \"module\" with NodeNext to resolve verbatimModuleSyntax import/export errors.",
-    "tags": ["typescript", "esm", "tsconfig"],
+    "tags": ["typescript", "esm", "commonjs", "tsconfig", "module-resolution", "nodejs", "verbatimModuleSyntax", "import-export"],
     "file": "client.ts"
   }
 ]
@@ -649,8 +655,8 @@ MODEL OUTPUT TO CONVERT:
         }
     });
 
-    if items.len() > 5 {
-        items.truncate(5);
+    if items.len() > 10 {
+        items.truncate(10);
     }
 
     let debug = if opts.debug_raw_output { Some(raw) } else { None };
