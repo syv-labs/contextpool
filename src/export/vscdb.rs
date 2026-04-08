@@ -42,9 +42,11 @@ pub async fn export_vscdb(args: ExportVscdbArgs) -> Result<()> {
         let summary = if args.offline {
             fallback_summary(&extracted)
         } else {
-            summarize_embedded(&extracted)
-                .await
-                .unwrap_or_else(|_| fallback_summary(&extracted))
+            match summarize_embedded(&extracted).await {
+                Ok(Some(s)) => s,
+                Ok(None) => continue, // no insights — skip file
+                Err(_) => fallback_summary(&extracted),
+            }
         };
 
         let safe_name = safe_rel_name(&workspace_storage, &db_path);

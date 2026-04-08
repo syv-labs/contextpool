@@ -23,9 +23,14 @@ pub async fn export_kiro(args: ExportKiroArgs) -> Result<()> {
     let summary = if args.offline {
         fallback_summary(&extracted)
     } else {
-        summarize_embedded(&extracted)
-            .await
-            .unwrap_or_else(|_| fallback_summary(&extracted))
+        match summarize_embedded(&extracted).await {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                println!("No insights extracted from Kiro chat — skipping.");
+                return Ok(());
+            }
+            Err(_) => fallback_summary(&extracted),
+        }
     };
 
     let out_file = run_dir.join("kiro-chat.summary.md");

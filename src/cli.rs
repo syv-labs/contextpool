@@ -34,6 +34,9 @@ pub enum Command {
 
     /// Show team info and projects
     Team(TeamArgs),
+
+    /// Register the contextpool MCP server with Claude Code and Cursor
+    Install(InstallArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -241,5 +244,32 @@ pub struct ExportKiroArgs {
     /// Do not call remote API; store a local fallback summary
     #[arg(long)]
     pub offline: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct InstallArgs {
+    /// Path to the cxp binary to register (defaults to the current executable)
+    #[arg(long)]
+    pub binary_path: Option<PathBuf>,
+
+    /// Path to Claude Code's global config file (defaults to ~/.claude.json)
+    #[arg(long)]
+    pub claude_json: Option<PathBuf>,
+
+    /// Path to Cursor's MCP config file (defaults to ~/.cursor/mcp.json)
+    #[arg(long)]
+    pub cursor_mcp: Option<PathBuf>,
+
+    /// Overwrite an existing contextpool entry if one is already present
+    #[arg(long)]
+    pub force: bool,
+
+    /// Skip updating Claude Code config
+    #[arg(long)]
+    pub skip_claude: bool,
+
+    /// Skip updating Cursor config
+    #[arg(long)]
+    pub skip_cursor: bool,
 }
 

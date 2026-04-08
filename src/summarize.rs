@@ -23,7 +23,7 @@ pub fn fallback_summary(text: &str) -> String {
     )
 }
 
-pub async fn summarize_embedded(text: &str) -> Result<String> {
+pub async fn summarize_embedded(text: &str) -> Result<Option<String>> {
     // Prefer Anthropic key (already in env when running inside Claude Code / Cursor),
     // fall back to NVIDIA with an interactive prompt.
     let backend = match load_api_backend() {
@@ -70,7 +70,7 @@ pub async fn summarize_embedded(text: &str) -> Result<String> {
     let _ = bg.join();
 
     if items.is_empty() {
-        return Ok("No high-signal engineering insights extracted.".to_string());
+        return Ok(None);
     }
 
     let mut out = String::new();
@@ -119,6 +119,6 @@ pub async fn summarize_embedded(text: &str) -> Result<String> {
         out.push('\n');
     }
 
-    Ok(out.trim().to_string())
+    Ok(Some(out.trim().to_string()))
 }
 
