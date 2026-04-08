@@ -4,6 +4,7 @@ mod credentials;
 mod embedded_agent;
 mod export;
 mod init;
+mod install_cmd;
 mod mcp;
 mod paths;
 mod project;
@@ -40,5 +41,6 @@ async fn main() -> Result<()> {
         Command::Push(args) => team::cmd_push(args).await,
         Command::Pull(args) => team::cmd_pull(args).await,
         Command::Team(args) => team::cmd_team(args).await,
+        Command::Install(args) => install_cmd::cmd_install(args).map_err(Into::into),
     }
 }

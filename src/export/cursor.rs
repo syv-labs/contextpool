@@ -40,9 +40,11 @@ pub async fn export_cursor(args: ExportCursorArgs) -> Result<()> {
         let summary = if args.offline {
             fallback_summary(&extracted)
         } else {
-            summarize_embedded(&extracted)
-                .await
-                .unwrap_or_else(|_| fallback_summary(&extracted))
+            match summarize_embedded(&extracted).await {
+                Ok(Some(s)) => s,
+                Ok(None) => continue, // no insights — skip file
+                Err(_) => fallback_summary(&extracted),
+            }
         };
 
         let safe_name = if args.transcript.is_some() {
@@ -113,9 +115,11 @@ pub async fn export_cursor_project(cursor_dir: &Path, project_id: &str, opts: Cu
         let summary = if opts.offline {
             fallback_summary(&extracted)
         } else {
-            summarize_embedded(&extracted)
-                .await
-                .unwrap_or_else(|_| fallback_summary(&extracted))
+            match summarize_embedded(&extracted).await {
+                Ok(Some(s)) => s,
+                Ok(None) => continue, // no insights — skip file
+                Err(_) => fallback_summary(&extracted),
+            }
         };
 
         let safe_name = safe_rel_name(&project_root, &path);
@@ -194,9 +198,13 @@ pub async fn export_cursor_project_chats(
         let raw = fs::read_to_string(&path).with_context(|| format!("Reading {}", path.display()))?;
         let extracted = extract_text_from_jsonl(&raw);
 
-        let summary = summarize_embedded(&extracted)
+        let summary = match summarize_embedded(&extracted)
             .await
-            .with_context(|| format!("Summarization failed for {}", path.display()))?;
+            .with_context(|| format!("Summarization failed for {}", path.display()))?
+        {
+            Some(s) => s,
+            None => continue, // no insights — skip file
+        };
 
         let safe_name = path
             .file_stem()

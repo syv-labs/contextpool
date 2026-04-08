@@ -41,9 +41,11 @@ pub async fn export_claude_code(args: ExportClaudeCodeArgs) -> Result<()> {
         let summary = if args.offline {
             fallback_summary(&extracted)
         } else {
-            summarize_embedded(&extracted)
-                .await
-                .unwrap_or_else(|_| fallback_summary(&extracted))
+            match summarize_embedded(&extracted).await {
+                Ok(Some(s)) => s,
+                Ok(None) => continue, // no insights — skip file
+                Err(_) => fallback_summary(&extracted),
+            }
         };
 
         let safe_name = if args.session.is_some() {
@@ -133,9 +135,13 @@ pub async fn export_claude_code_project_sessions(
         let raw = fs::read_to_string(&path).with_context(|| format!("Reading {}", path.display()))?;
         let extracted = extract_text_from_jsonl(&raw);
 
-        let summary = summarize_embedded(&extracted)
+        let summary = match summarize_embedded(&extracted)
             .await
-            .with_context(|| format!("Summarization failed for {}", path.display()))?;
+            .with_context(|| format!("Summarization failed for {}", path.display()))?
+        {
+            Some(s) => s,
+            None => continue, // no insights — skip file
+        };
 
         let safe_name = path
             .file_stem()
