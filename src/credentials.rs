@@ -114,18 +114,30 @@ pub fn load_nvidia_api_key() -> Option<String> {
         }
     }
 
-    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
-        if let Ok(v) = entry.get_password() {
-            let t = v.trim().to_string();
-            if !t.is_empty() {
-                return Some(t);
-            }
-        }
+    // Check the file-based cache before the keychain. The file is written on
+    // first interactive entry or successful keychain read. This path is fast,
+    // non-blocking, and works in headless/MCP subprocess contexts where
+    // the keychain may display a UI permission dialog.
+    if let Some(k) = load_api_key_from_file() {
+        return Some(k);
     }
 
-    // Fallback for cases where keychain access is flaky/unavailable across processes.
-    // This is a last resort cache; keychain remains the primary store.
-    load_api_key_from_file()
+    // Keychain lookup: on macOS this is a blocking syscall that can pop a UI
+    // dialog in headless contexts (MCP subprocesses), potentially hanging for
+    // 30+ seconds. Run it in a background thread with a timeout so the Tokio
+    // async runtime is never stalled.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
+            if let Ok(v) = entry.get_password() {
+                let t = v.trim().to_string();
+                if !t.is_empty() {
+                    let _ = tx.send(t);
+                }
+            }
+        }
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(3)).ok()
 }
 
 pub fn ensure_nvidia_api_key_interactive() -> Result<String> {

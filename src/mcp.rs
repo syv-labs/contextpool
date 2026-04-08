@@ -34,7 +34,10 @@ impl ContextPoolServer {
     }
 
     async fn fetch_project_context_impl(&self, project_path: Option<String>) -> String {
-        let path = resolve_project_path(project_path);
+        let path = match resolve_project_path(project_path) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
 
         let local_base = path.join("ContextPool");
         let project_id = project_id_from_path(&path);
@@ -82,8 +85,9 @@ impl ContextPoolServer {
             return format_context_index(&proj_dir, 0, 0, 0);
         }
 
-        // Summarize new transcripts
-        let opts = EmbeddedAgentOptions::from_env(backend);
+        // Summarize new transcripts in parallel.
+        // opts/run_dir/now are wrapped in Arc so each task can hold a cheap clone.
+        let opts = Arc::new(EmbeddedAgentOptions::from_env(backend));
         let run_id = Utc::now()
             .to_rfc3339_opts(SecondsFormat::Secs, true)
             .replace(':', "-");
@@ -91,103 +95,150 @@ impl ContextPoolServer {
         if let Err(e) = std::fs::create_dir_all(&run_dir) {
             return format!("Failed to create run dir: {e}");
         }
+        let run_dir = Arc::new(run_dir);
 
         let mut index_entries: Vec<serde_json::Value> = Vec::new();
         let mut imported = 0;
         let mut failed = 0;
         let mut skipped = 0;
         let mut errors: Vec<String> = Vec::new();
-        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+        let now = Arc::new(Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true));
 
-        for transcript_path in &new_files {
-            let Ok(raw) = std::fs::read_to_string(transcript_path) else {
-                continue;
-            };
-            let extracted = crate::transcript::extract_text_from_jsonl(&raw);
+        // Limit concurrent LLM calls to avoid rate-limit errors.
+        // Override with CXP_CONCURRENCY env var (default 4).
+        let concurrency = std::env::var("CXP_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(4)
+            .max(1);
+        let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
 
-            // Tier 5: Skip tiny transcripts
-            if extracted.len() < 100 {
-                skipped += 1;
-                // Mark as indexed so we don't keep re-discovering empty files
-                index_entries.push(serde_json::json!({
-                    "source_path": transcript_path.to_string_lossy(),
-                    "output_path": null,
-                    "chars_in": extracted.len(),
-                    "skipped": "too short",
-                }));
-                continue;
-            }
+        // Return type per task:
+        //   None                            → I/O error, skip (retry next fetch)
+        //   Some((entry, true,  false, None))  → imported successfully
+        //   Some((entry, false, true,  None))  → skipped (too short)
+        //   Some((_,     false, false, None))  → LLM ran, no insights (mark indexed)
+        //   Some((_,     false, false, Some(e))) → LLM failed (retry next fetch)
+        type TaskOut = Option<(serde_json::Value, bool, bool, Option<String>)>;
+        let mut set: tokio::task::JoinSet<TaskOut> = tokio::task::JoinSet::new();
 
-            let (items, _) =
-                match crate::embedded_agent::generate_context_items(&extracted, &[], "", &opts)
-                    .await
+        for transcript_path in new_files {
+            let opts = opts.clone();
+            let run_dir = run_dir.clone();
+            let now = now.clone();
+            let sem = sem.clone();
+
+            set.spawn(async move {
+                // Acquire a slot — released automatically when _permit is dropped.
+                let _permit = sem.acquire_owned().await;
+
+                let raw = match std::fs::read_to_string(&transcript_path) {
+                    Ok(r) => r,
+                    Err(_) => return None,
+                };
+                let extracted = crate::transcript::extract_text_from_jsonl(&raw);
+                let src = transcript_path.to_string_lossy().to_string();
+
+                // Tier 5: Skip tiny transcripts
+                if extracted.len() < 100 {
+                    let entry = serde_json::json!({
+                        "source_path": src,
+                        "output_path": null,
+                        "chars_in": extracted.len(),
+                        "skipped": "too short",
+                    });
+                    return Some((entry, false, true, None));
+                }
+
+                let (items, _) = match crate::embedded_agent::generate_context_items(
+                    &extracted, &[], "", &opts,
+                )
+                .await
                 {
                     Ok(r) => r,
                     Err(e) => {
-                        // Tier 1: Do NOT mark as indexed — will retry on next fetch
-                        failed += 1;
-                        errors.push(format!("{}", e));
-                        continue;
+                        // Tier 1: Do NOT mark as indexed — will retry on next fetch.
+                        return Some((serde_json::Value::Null, false, false, Some(e.to_string())));
                     }
                 };
 
-            // No insights extracted — mark indexed (LLM succeeded, just nothing to report)
-            if items.is_empty() {
-                index_entries.push(serde_json::json!({
-                    "source_path": transcript_path.to_string_lossy(),
-                    "output_path": null,
+                // No insights — mark indexed (LLM ran fine, nothing worth storing)
+                if items.is_empty() {
+                    let entry = serde_json::json!({
+                        "source_path": src,
+                        "output_path": null,
+                        "chars_in": extracted.len(),
+                    });
+                    return Some((entry, false, false, None));
+                }
+
+                let safe_name = transcript_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("session")
+                    .to_string();
+                let out_file = run_dir.join(format!("{safe_name}.summary.md"));
+
+                // Tier 4: Add metadata & attribution
+                let source_ide = if src.contains(".claude/projects") {
+                    "Claude Code"
+                } else if src.contains(".cursor/") {
+                    "Cursor"
+                } else {
+                    "Unknown"
+                };
+
+                let summary_md = items_to_markdown(&items);
+                let _ = std::fs::write(
+                    &out_file,
+                    format!(
+                        "# Summary\n\n\
+                         ## Metadata\n\
+                         - **Source:** {source_ide} session\n\
+                         - **Session:** {safe_name}\n\
+                         - **Indexed:** {now}\n\n\
+                         {summary_md}\n\n\
+                         ## Source\n- `{src}`\n"
+                    ),
+                );
+
+                let entry = serde_json::json!({
+                    "source_path": src,
+                    "output_path": out_file.to_string_lossy(),
                     "chars_in": extracted.len(),
-                }));
-                continue;
+                });
+                Some((entry, true, false, None))
+            });
+        }
+
+        // Collect results as tasks complete.
+        while let Some(join_result) = set.join_next().await {
+            match join_result.unwrap_or(None) {
+                None => {} // I/O error — skip, retry on next fetch
+                Some((_, false, false, Some(e))) => {
+                    failed += 1;
+                    errors.push(e);
+                }
+                Some((entry, false, true, None)) => {
+                    skipped += 1;
+                    index_entries.push(entry);
+                }
+                Some((entry, true, false, None)) => {
+                    imported += 1;
+                    index_entries.push(entry);
+                }
+                Some((entry, false, false, None)) => {
+                    index_entries.push(entry); // LLM ran, no insights
+                }
+                Some(_) => {} // unreachable
             }
-
-            let safe_name = transcript_path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("session")
-                .to_string();
-            let out_file = run_dir.join(format!("{safe_name}.summary.md"));
-
-            // Tier 4: Add metadata & attribution
-            let source_ide = if transcript_path
-                .to_string_lossy()
-                .contains(".claude/projects")
-            {
-                "Claude Code"
-            } else if transcript_path.to_string_lossy().contains(".cursor/") {
-                "Cursor"
-            } else {
-                "Unknown"
-            };
-
-            let summary_md = items_to_markdown(&items);
-            let _ = std::fs::write(
-                &out_file,
-                format!(
-                    "# Summary\n\n\
-                     ## Metadata\n\
-                     - **Source:** {source_ide} session\n\
-                     - **Session:** {safe_name}\n\
-                     - **Indexed:** {now}\n\n\
-                     {summary_md}\n\n\
-                     ## Source\n- `{}`\n",
-                    transcript_path.display()
-                ),
-            );
-
-            index_entries.push(serde_json::json!({
-                "source_path": transcript_path.to_string_lossy(),
-                "output_path": out_file.to_string_lossy(),
-                "chars_in": extracted.len(),
-            }));
-            imported += 1;
         }
 
         if !index_entries.is_empty() {
             let index_path = run_dir.join("index.json");
-            let _ = std::fs::write(
+            let _ = atomic_write(
                 &index_path,
-                serde_json::to_string_pretty(&index_entries).unwrap_or_default(),
+                &serde_json::to_string_pretty(&index_entries).unwrap_or_default(),
             );
         }
 
@@ -212,7 +263,10 @@ impl ContextPoolServer {
         project_path: Option<String>,
         ids: Option<Vec<String>>,
     ) -> String {
-        let path = resolve_project_path(project_path);
+        let path = match resolve_project_path(project_path) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
         let project_id = project_id_from_path(&path);
 
         // Local ContextPool takes priority over the global data dir
@@ -398,15 +452,20 @@ impl ServerHandler for ContextPoolServer {
                 self.get_project_context_impl(project_path, ids)
             }
             "search_context" => {
-                let query = args
-                    .get("query")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
+                let query = match args.get("query").and_then(|v| v.as_str()) {
+                    Some(q) if !q.trim().is_empty() => q.to_string(),
+                    _ => {
+                        return Err(McpError::invalid_params(
+                            "search_context requires a non-empty 'query' parameter",
+                            None,
+                        ));
+                    }
+                };
                 let project_path = args
                     .get("project_path")
                     .and_then(|v| v.as_str())
                     .map(String::from);
-                self.search_context_impl(query, project_path)
+                self.search_context_impl(&query, project_path)
             }
             "list_context_projects" => self.list_projects_impl(),
             name => {
@@ -423,11 +482,25 @@ impl ServerHandler for ContextPoolServer {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-fn resolve_project_path(project_path: Option<String>) -> PathBuf {
-    project_path
-        .map(PathBuf::from)
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| PathBuf::from("."))
+/// Write `content` to `path` atomically via a sibling `.tmp` file + rename.
+/// On POSIX, `rename(2)` is atomic: readers never see a partial write.
+fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, content)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+fn resolve_project_path(project_path: Option<String>) -> Result<PathBuf, String> {
+    if let Some(p) = project_path {
+        return Ok(PathBuf::from(p));
+    }
+    std::env::current_dir().map_err(|e| {
+        format!(
+            "Cannot determine project directory: {e}.\n\
+             Pass the 'project_path' parameter explicitly to fix this."
+        )
+    })
 }
 
 /// Tier 8: Remove index entries where the summary file was deleted,
@@ -456,9 +529,9 @@ fn clean_stale_index_entries(proj_dir: &Path) {
             })
             .collect();
         if cleaned.len() < original_len {
-            let _ = std::fs::write(
+            let _ = atomic_write(
                 e.path(),
-                serde_json::to_string_pretty(&cleaned).unwrap_or_default(),
+                &serde_json::to_string_pretty(&cleaned).unwrap_or_default(),
             );
         }
     }
