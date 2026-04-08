@@ -319,20 +319,43 @@ pub fn sanitize_chat_text(text: &str, extract_user_queries_only: bool) -> String
 
 fn extract_first_json_candidate(text: &str) -> Option<String> {
     let cleaned = text.trim();
-    let start_arr = cleaned.find('[');
-    let end_arr = cleaned.rfind(']');
-    if let (Some(s), Some(e)) = (start_arr, end_arr) {
-        if e > s {
-            return Some(cleaned[s..=e].to_string());
+
+    // Try each '[' from left to right, paired with the rightmost ']'.
+    // This handles preamble text containing brackets before the actual JSON
+    // (e.g. "Note: the list [here] ... [{json}]").
+    if let Some(end) = cleaned.rfind(']') {
+        let mut search_from = 0;
+        while search_from <= end {
+            if let Some(rel) = cleaned[search_from..=end].find('[') {
+                let abs_start = search_from + rel;
+                let candidate = &cleaned[abs_start..=end];
+                if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
+                    return Some(candidate.to_string());
+                }
+                search_from = abs_start + 1;
+            } else {
+                break;
+            }
         }
     }
-    let start_obj = cleaned.find('{');
-    let end_obj = cleaned.rfind('}');
-    if let (Some(s), Some(e)) = (start_obj, end_obj) {
-        if e > s {
-            return Some(cleaned[s..=e].to_string());
+
+    // Fallback: try JSON objects the same way.
+    if let Some(end) = cleaned.rfind('}') {
+        let mut search_from = 0;
+        while search_from <= end {
+            if let Some(rel) = cleaned[search_from..=end].find('{') {
+                let abs_start = search_from + rel;
+                let candidate = &cleaned[abs_start..=end];
+                if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
+                    return Some(candidate.to_string());
+                }
+                search_from = abs_start + 1;
+            } else {
+                break;
+            }
         }
     }
+
     None
 }
 
@@ -595,6 +618,21 @@ pub async fn generate_context_items(
     let mut chat = chat_text.to_string();
     if opts.sanitize_chat {
         chat = sanitize_chat_text(&chat, opts.extract_user_queries_only);
+    }
+
+    // Truncate very long transcripts to keep LLM latency and token cost bounded.
+    // The LLM only needs the most signal-dense portion; later content is typically
+    // repetitive or low-signal. Override with CXP_MAX_CHARS env var.
+    let max_chars = std::env::var("CXP_MAX_CHARS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(20_000);
+    if chat.len() > max_chars {
+        chat.truncate(max_chars);
+        // Trim to the last newline so we don't cut mid-sentence.
+        if let Some(pos) = chat.rfind('\n') {
+            chat.truncate(pos);
+        }
     }
 
     let timeout = match &opts.backend {
