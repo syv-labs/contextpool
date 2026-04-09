@@ -9,8 +9,10 @@ use anyhow::Result;
 use chrono::{SecondsFormat, Utc};
 use rmcp::{
     model::{
-        CallToolRequestParam, CallToolResult, Content, Implementation, ListToolsResult,
-        PaginatedRequestParamInner, ProtocolVersion, ServerCapabilities, ServerInfo, Tool,
+        Annotated, CallToolRequestParam, CallToolResult, Content, Implementation,
+        ListResourcesResult, ListToolsResult, PaginatedRequestParamInner, ProtocolVersion,
+        RawResource, ReadResourceRequestParam, ReadResourceResult, ResourceContents,
+        ServerCapabilities, ServerInfo, Tool,
     },
     service::RequestContext,
     Error as McpError, RoleServer, ServerHandler, ServiceExt,
@@ -309,7 +311,7 @@ impl ServerHandler for ContextPoolServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             protocol_version: ProtocolVersion::LATEST,
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            capabilities: ServerCapabilities::builder().enable_tools().enable_resources().build(),
             server_info: Implementation {
                 name: "contextpool".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
@@ -483,6 +485,70 @@ impl ServerHandler for ContextPoolServer {
         };
 
         Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    async fn list_resources(
+        &self,
+        _: Option<PaginatedRequestParamInner>,
+        _: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, McpError> {
+        Ok(ListResourcesResult {
+            next_cursor: None,
+            resources: vec![Annotated {
+                raw: RawResource {
+                    uri: "contextpool://index".into(),
+                    name: "ContextPool Session Index".into(),
+                    description: Some(
+                        "Current project context index. Reading this resource triggers \
+                         background indexing of any new coding sessions."
+                            .into(),
+                    ),
+                    mime_type: Some("text/plain".into()),
+                    size: None,
+                },
+                annotations: None,
+            }],
+        })
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParam,
+        _: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResult, McpError> {
+        if request.uri != "contextpool://index" {
+            return Err(McpError::resource_not_found(
+                format!("Unknown resource: {}", request.uri),
+                None,
+            ));
+        }
+
+        let path = std::env::current_dir().map_err(|e| {
+            McpError::internal_error(format!("Cannot determine cwd: {e}"), None)
+        })?;
+
+        let project_id = project_id_from_path(&path);
+        let proj_dir = project_dir(&path.join("ContextPool"), &project_id);
+
+        // Return cached index immediately — no summarization on the hot path.
+        let cached = format_context_index(&proj_dir, 0, 0, 0);
+
+        // Kick off background indexing of any new sessions.
+        let server = self.clone();
+        let path_str = path.to_string_lossy().to_string();
+        tokio::spawn(async move {
+            server.fetch_project_context_impl(Some(path_str)).await;
+        });
+
+        let text = format!(
+            "{cached}\n\n\
+             *(Background indexing of new sessions started — \
+             call search_context or fetch_project_context to get fresh results.)*"
+        );
+
+        Ok(ReadResourceResult {
+            contents: vec![ResourceContents::text(text, request.uri)],
+        })
     }
 }
 
