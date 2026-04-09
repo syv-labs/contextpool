@@ -271,5 +271,13 @@ pub struct InstallArgs {
     /// Skip updating Cursor config
     #[arg(long)]
     pub skip_cursor: bool,
+
+    /// Skip the LLM backend setup wizard
+    #[arg(long)]
+    pub skip_setup: bool,
+
+    /// Run only the LLM backend setup wizard (skip MCP registration)
+    #[arg(long, conflicts_with_all = ["skip_claude", "skip_cursor", "skip_setup"])]
+    pub setup: bool,
 }
 

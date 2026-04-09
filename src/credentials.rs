@@ -10,7 +10,11 @@ const KEYRING_SERVICE: &str = "contextpool";
 const KEYRING_USER: &str = "default";
 const ENV_KEY: &str = "NVIDIA_API_KEY";
 const ANTHROPIC_ENV_KEY: &str = "ANTHROPIC_API_KEY";
+const OPENAI_ENV_KEY: &str = "OPENAI_API_KEY";
 const API_KEY_FILE_NAME: &str = "nvidia_api_key";
+const ANTHROPIC_KEY_FILE_NAME: &str = "anthropic_api_key";
+const OPENAI_KEY_FILE_NAME: &str = "openai_api_key";
+const BACKEND_PREF_FILE_NAME: &str = "backend_preference";
 
 /// Which LLM backend to use for summarization.
 #[derive(Clone, Debug)]
@@ -25,25 +29,60 @@ pub enum ApiBackend {
     Nvidia(String),
 }
 
-/// Priority: claude CLI → ANTHROPIC_API_KEY → OPENAI_API_KEY → NVIDIA key chain.
-/// Returns `None` only if no backend is available at all.
+/// Resolve the active backend.
+///
+/// Priority:
+///   1. Explicit user preference (saved by `cxp install` wizard)
+///   2. Environment variables (ANTHROPIC_API_KEY, OPENAI_API_KEY, NVIDIA_API_KEY)
+///   3. Keychain / file-cached keys
+///   4. Claude Code CLI fallback (if `claude` is in PATH)
+///
+/// Returns `None` only if nothing is configured.
 pub fn load_api_backend() -> Option<ApiBackend> {
-    if claude_cli_in_path() {
-        return Some(ApiBackend::ClaudeCodeCli);
+    match load_backend_preference() {
+        Some(BackendPreference::ClaudeCode) => {
+            if claude_cli_in_path() { return Some(ApiBackend::ClaudeCodeCli); }
+        }
+        Some(BackendPreference::Anthropic) => {
+            if let Some(k) = std::env::var(ANTHROPIC_ENV_KEY).ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .or_else(|| load_anthropic_api_key_stored())
+            {
+                return Some(ApiBackend::Anthropic(k));
+            }
+        }
+        Some(BackendPreference::OpenAI) => {
+            if let Some(k) = std::env::var(OPENAI_ENV_KEY).ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .or_else(|| load_openai_api_key_stored())
+            {
+                return Some(ApiBackend::OpenAI(k));
+            }
+        }
+        Some(BackendPreference::Nvidia) => {
+            if let Some(k) = load_nvidia_api_key() {
+                return Some(ApiBackend::Nvidia(k));
+            }
+        }
+        None => {}
     }
+
+    // No preference set — fall back to auto-detection.
     if let Ok(v) = std::env::var(ANTHROPIC_ENV_KEY) {
         let t = v.trim().to_string();
-        if !t.is_empty() {
-            return Some(ApiBackend::Anthropic(t));
-        }
+        if !t.is_empty() { return Some(ApiBackend::Anthropic(t)); }
     }
-    if let Ok(v) = std::env::var("OPENAI_API_KEY") {
+    if let Ok(v) = std::env::var(OPENAI_ENV_KEY) {
         let t = v.trim().to_string();
-        if !t.is_empty() {
-            return Some(ApiBackend::OpenAI(t));
-        }
+        if !t.is_empty() { return Some(ApiBackend::OpenAI(t)); }
     }
-    load_nvidia_api_key().map(ApiBackend::Nvidia)
+    if let Some(k) = load_anthropic_api_key_stored() { return Some(ApiBackend::Anthropic(k)); }
+    if let Some(k) = load_openai_api_key_stored()    { return Some(ApiBackend::OpenAI(k)); }
+    if let Some(k) = load_nvidia_api_key()           { return Some(ApiBackend::Nvidia(k)); }
+    if claude_cli_in_path()                          { return Some(ApiBackend::ClaudeCodeCli); }
+    None
 }
 
 fn claude_cli_in_path() -> bool {
@@ -100,6 +139,126 @@ fn delete_api_key_file() -> Result<()> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(anyhow::anyhow!("Failed deleting {}: {e}", path.display())),
     }
+}
+
+// ── Generic named-file helpers ────────────────────────────────────────────────
+
+fn named_key_file_path(name: &str) -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        .join("ContextPool")
+        .join(name)
+}
+
+fn load_key_from_named_file(name: &str) -> Option<String> {
+    let path = named_key_file_path(name);
+    let Ok(raw) = fs::read_to_string(&path) else { return None };
+    let key = raw.trim().to_string();
+    if key.is_empty() { None } else { Some(key) }
+}
+
+fn save_key_to_named_file(name: &str, key: &str) -> Result<()> {
+    let path = named_key_file_path(name);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&path, key)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&path)?.permissions();
+        perms.set_mode(0o600);
+        fs::set_permissions(&path, perms)?;
+    }
+    Ok(())
+}
+
+// ── Backend preference ────────────────────────────────────────────────────────
+
+/// The user's explicitly chosen backend, stored as a plain-text file.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BackendPreference {
+    ClaudeCode,
+    Anthropic,
+    OpenAI,
+    Nvidia,
+}
+
+pub fn save_backend_preference(pref: &BackendPreference) -> Result<()> {
+    let s = match pref {
+        BackendPreference::ClaudeCode => "claude_code",
+        BackendPreference::Anthropic  => "anthropic",
+        BackendPreference::OpenAI     => "openai",
+        BackendPreference::Nvidia     => "nvidia",
+    };
+    save_key_to_named_file(BACKEND_PREF_FILE_NAME, s)
+}
+
+pub fn load_backend_preference() -> Option<BackendPreference> {
+    let raw = load_key_from_named_file(BACKEND_PREF_FILE_NAME)?;
+    match raw.as_str() {
+        "claude_code" => Some(BackendPreference::ClaudeCode),
+        "anthropic"   => Some(BackendPreference::Anthropic),
+        "openai"      => Some(BackendPreference::OpenAI),
+        "nvidia"      => Some(BackendPreference::Nvidia),
+        _             => None,
+    }
+}
+
+// ── Anthropic key ─────────────────────────────────────────────────────────────
+
+static CACHED_ANTHROPIC_KEY: OnceLock<String> = OnceLock::new();
+
+pub fn load_anthropic_api_key_stored() -> Option<String> {
+    if let Some(k) = CACHED_ANTHROPIC_KEY.get() { return Some(k.clone()); }
+    if let Some(k) = load_key_from_named_file(ANTHROPIC_KEY_FILE_NAME) { return Some(k); }
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, "anthropic") {
+            if let Ok(v) = entry.get_password() {
+                let t = v.trim().to_string();
+                if !t.is_empty() { let _ = tx.send(t); }
+            }
+        }
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(3)).ok()
+}
+
+pub fn save_anthropic_api_key(key: &str) -> Result<()> {
+    let _ = CACHED_ANTHROPIC_KEY.set(key.to_string());
+    save_key_to_named_file(ANTHROPIC_KEY_FILE_NAME, key)?;
+    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, "anthropic") {
+        let _ = entry.set_password(key);
+    }
+    Ok(())
+}
+
+// ── OpenAI key ────────────────────────────────────────────────────────────────
+
+static CACHED_OPENAI_KEY: OnceLock<String> = OnceLock::new();
+
+pub fn load_openai_api_key_stored() -> Option<String> {
+    if let Some(k) = CACHED_OPENAI_KEY.get() { return Some(k.clone()); }
+    if let Some(k) = load_key_from_named_file(OPENAI_KEY_FILE_NAME) { return Some(k); }
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, "openai") {
+            if let Ok(v) = entry.get_password() {
+                let t = v.trim().to_string();
+                if !t.is_empty() { let _ = tx.send(t); }
+            }
+        }
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(3)).ok()
+}
+
+pub fn save_openai_api_key(key: &str) -> Result<()> {
+    let _ = CACHED_OPENAI_KEY.set(key.to_string());
+    save_key_to_named_file(OPENAI_KEY_FILE_NAME, key)?;
+    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, "openai") {
+        let _ = entry.set_password(key);
+    }
+    Ok(())
 }
 
 pub fn load_nvidia_api_key() -> Option<String> {

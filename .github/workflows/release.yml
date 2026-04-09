@@ -59,6 +59,19 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Stamp version from tag into Cargo.toml
+        shell: python3 {0}
+        run: |
+          import re, os
+          tag = os.environ['RELEASE_TAG'].lstrip('v')
+          path = 'Cargo.toml'
+          content = open(path).read()
+          # Replace only the first bare `version = "..."` line (the [package] version).
+          # Dependency versions use inline `{ version = "..." }` syntax and are unaffected.
+          updated = re.sub(r'^version = "[^"]+"', f'version = "{tag}"', content, count=1, flags=re.MULTILINE)
+          open(path, 'w').write(updated)
+          print(f'Stamped Cargo.toml version → {tag}')
+
       - name: Install musl tools (linux-musl)
         if: startsWith(matrix.target, 'x86_64-unknown-linux-musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
