@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - "v*"
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       tag:
@@ -70,7 +68,7 @@ jobs:
           # Dependency versions use inline `{ version = "..." }` syntax and are unaffected.
           updated = re.sub(r'^version = "[^"]+"', f'version = "{tag}"', content, count=1, flags=re.MULTILINE)
           open(path, 'w').write(updated)
-          print(f'Stamped Cargo.toml version → {tag}')
+          print(f'Stamped Cargo.toml version: {tag}')
 
       - name: Install musl tools (linux-musl)
         if: startsWith(matrix.target, 'x86_64-unknown-linux-musl')
@@ -124,7 +122,7 @@ jobs:
           Compress-Archive -Path "dist/${env:BIN_NAME}${{ matrix.ext }}" -DestinationPath $zipPath -Force
 
       - name: Upload release asset to public repo
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.CXP_RELEASE_TOKEN }}
@@ -161,7 +159,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download public release assets
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ secrets.CXP_RELEASE_TOKEN }}
         run: |
@@ -171,7 +169,7 @@ jobs:
           gh release download "$tag" --repo "${PUBLIC_RELEASE_REPO}" --dir artifacts
 
       - name: Generate checksums
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         run: |
           set -euo pipefail
           mkdir -p artifacts
@@ -181,7 +179,7 @@ jobs:
           cat checksums.txt
 
       - name: Upload checksums to public repo
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ secrets.CXP_RELEASE_TOKEN }}
         run: |
