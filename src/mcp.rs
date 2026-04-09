@@ -315,20 +315,24 @@ impl ServerHandler for ContextPoolServer {
                 version: env!("CARGO_PKG_VERSION").into(),
             },
             instructions: Some(
-                "ContextPool gives you persistent memory across sessions. Follow these rules:\n\n\
-                 If this is the first message in a new conversation for this project, call \
-                 fetch_project_context once to index any new transcripts and load the summary index. \
-                 Then call get_project_context with relevant ids to load insights before starting work.\n\n\
-                 When the user references a past conversation, asks you to remember something discussed before, \
-                 or says things like \"we talked about this\", \"remember when we...\", \"in our last session\", \
-                 first try search_context or get_project_context with relevant keywords to find the discussion. \
-                 Only call fetch_project_context if the search returns no results — fetching re-indexes \
-                 transcripts and will pick up sessions that haven't been summarized yet.\n\n\
-                 When debugging a bug, encountering an error, or making an architectural decision, \
-                 call search_context with relevant keywords (error messages, component names, library names) \
-                 to check if the issue was addressed in a prior session.\n\n\
-                 Use list_context_projects to see all projects with stored context when the user \
-                 works across multiple repositories."
+                "ContextPool gives you persistent memory across sessions. \
+                 Summaries are stored locally from both Claude Code and Cursor sessions. \
+                 Follow these rules:\n\n\
+                 INDEXING: IMMEDIATELY call fetch_project_context at the very start of every new \
+                 conversation, before responding to the user's first message. It returns only a \
+                 count and topic list — not the summaries themselves — so it is safe to call \
+                 without consuming context.\n\n\
+                 FINDING RELEVANT CONTEXT: Use search_context as the primary way to access memory. \
+                 Search with specific keywords related to the current task (error messages, \
+                 component names, library names, decisions). Only content that matches is returned, \
+                 so context window usage is proportional to relevance.\n\n\
+                 LOADING PAST SESSIONS: Only call get_project_context when the user explicitly \
+                 asks to review past sessions or when search_context returns no results and you \
+                 need broader coverage. Loading everything at once is expensive — prefer search.\n\n\
+                 WHEN TO SEARCH: Before suggesting a fix for a bug, before making an architectural \
+                 decision, when the user says \"we talked about this\" or \"remember when...\", \
+                 or when debugging an error you haven't seen before.\n\n\
+                 Use list_context_projects when the user works across multiple repositories."
                     .into(),
             ),
         }
@@ -351,11 +355,11 @@ impl ServerHandler for ContextPoolServer {
             tools: vec![
                 Tool {
                     name: "fetch_project_context".into(),
-                    description: "Discover and summarize Cursor and Claude Code transcripts for \
-                         this project. Stores summaries locally in <project>/ContextPool/. \
-                         Returns a compact index (ids, insight titles, tags) of all available \
-                         summaries. Call this first, then call get_project_context with the \
-                         relevant ids to load the full details."
+                    description: "Discover and summarize new Cursor and Claude Code transcripts \
+                         for this project. Stores summaries locally in <project>/ContextPool/. \
+                         Returns only a session count and topic list — NOT the summaries themselves. \
+                         Call this once per conversation to ensure indexing is current, then use \
+                         search_context to retrieve relevant insights."
                         .into(),
                     input_schema: schema(serde_json::json!({
                         "type": "object",
@@ -370,9 +374,9 @@ impl ServerHandler for ContextPoolServer {
                 Tool {
                     name: "get_project_context".into(),
                     description: "Load full content of stored context summaries into memory. \
-                         Pass ids from fetch_project_context to load specific summaries, or omit \
-                         ids to load everything. Returns the full markdown with insights, bug \
-                         fixes, and decisions."
+                         Pass ids to load specific summaries. Omit ids to load all (expensive — \
+                         prefer search_context for targeted retrieval). Use this only when the \
+                         user explicitly asks to review past sessions or search returns no results."
                         .into(),
                     input_schema: schema(serde_json::json!({
                         "type": "object",
@@ -392,8 +396,10 @@ impl ServerHandler for ContextPoolServer {
                 Tool {
                     name: "search_context".into(),
                     description: "Search stored context summaries for a keyword or phrase. \
-                         Useful for finding whether a bug was seen before or how a past \
-                         architectural decision was made."
+                         This is the primary way to access memory — only matching excerpts \
+                         are returned, keeping context usage proportional to relevance. \
+                         Search before suggesting fixes, making decisions, or when the user \
+                         references past work. Covers both Claude Code and Cursor sessions."
                         .into(),
                     input_schema: schema(serde_json::json!({
                         "type": "object",
@@ -654,16 +660,21 @@ fn items_to_markdown(items: &[ContextItem]) -> String {
     out.trim().to_string()
 }
 
-/// Build the compact index string that `fetch_project_context` returns.
+/// Build the lightweight overview that `fetch_project_context` returns.
+///
+/// Does NOT list individual summaries — that would flood the context window.
+/// The agent should use `search_context` to pull only what is relevant,
+/// and `get_project_context` only when the user explicitly asks for past sessions.
 fn format_context_index(
     proj_dir: &Path,
     newly_imported: usize,
     failed: usize,
     skipped: usize,
 ) -> String {
-    let mut entries: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
+    let mut summary_count = 0usize;
+    let mut all_tags: Vec<String> = Vec::new();
 
-    for entry in WalkDir::new(proj_dir).follow_links(false).sort_by_file_name() {
+    for entry in WalkDir::new(proj_dir).follow_links(false) {
         let Ok(e) = entry else { continue };
         if !e.file_type().is_file() {
             continue;
@@ -674,60 +685,54 @@ fn format_context_index(
         let Ok(content) = std::fs::read_to_string(e.path()) else {
             continue;
         };
-        let id = e
-            .path()
-            .strip_prefix(proj_dir)
-            .unwrap_or(e.path())
-            .to_string_lossy()
-            .to_string();
-        let (titles, tags) = parse_insight_metadata(&content);
-        entries.push((id, titles, tags));
+        summary_count += 1;
+        let (_, tags) = parse_insight_metadata(&content);
+        for tag in tags {
+            if !all_tags.contains(&tag) {
+                all_tags.push(tag);
+            }
+        }
     }
 
     // Tier 2: Helpful empty-state message
-    if entries.is_empty() {
-        return "No transcripts found for this project.\n\n\
-                ContextPool looks for transcripts in:\n\
-                \u{2022} Claude Code: ~/.claude/projects/<project>/\n\
-                \u{2022} Cursor: ~/.cursor/projects/<project>/agent-transcripts/\n\n\
-                Start a coding session in either tool and they'll appear here automatically."
+    if summary_count == 0 {
+        return "No transcripts indexed yet for this project.\n\n\
+                ContextPool indexes sessions from:\n\
+                - Claude Code: ~/.claude/projects/<project>/\n\
+                - Cursor: ~/.cursor/projects/<project>/agent-transcripts/\n\n\
+                Start a coding session and run fetch_project_context again to index it."
             .to_string();
     }
 
-    // Build status line
+    // Status line
     let mut parts: Vec<String> = Vec::new();
     if newly_imported > 0 {
-        parts.push(format!("Indexed {} new session(s)", newly_imported));
+        parts.push(format!("{} new session(s) indexed", newly_imported));
     }
     if failed > 0 {
-        parts.push(format!("{} failed (will retry next fetch)", failed));
+        parts.push(format!("{} failed (will retry)", failed));
     }
     if skipped > 0 {
         parts.push(format!("{} skipped (too short)", skipped));
     }
     if parts.is_empty() {
-        parts.push("All sessions already indexed".to_string());
-    }
-    let header = parts.join(". ");
-
-    let mut out = format!(
-        "{}. {} summaries available.\n\
-         Call get_project_context with the ids you want to load:\n\n",
-        header,
-        entries.len()
-    );
-
-    for (id, titles, tags) in &entries {
-        out.push_str(&format!("- id: `{}`\n", id));
-        if !titles.is_empty() {
-            out.push_str(&format!("  insights: {}\n", titles.join(" | ")));
-        }
-        if !tags.is_empty() {
-            out.push_str(&format!("  tags: {}\n", tags.join(", ")));
-        }
+        parts.push("Up to date".to_string());
     }
 
-    out
+    all_tags.sort();
+    let topics = if all_tags.is_empty() {
+        String::new()
+    } else {
+        format!("\nTopics covered: {}", all_tags.join(", "))
+    };
+
+    format!(
+        "{status}. {count} session(s) stored locally (Claude Code + Cursor).{topics}\n\
+         Use search_context(\"keyword\") to find relevant insights.",
+        status = parts.join(". "),
+        count = summary_count,
+        topics = topics,
+    )
 }
 
 /// Lightly parse a `.summary.md` to extract insight titles and tags for the index.
