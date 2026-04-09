@@ -60,9 +60,13 @@ Indexing is incremental — only new, unprocessed sessions are summarized on eac
 
 ---
 
-## Zero Config in Claude Code
+## One Command to Set Up Everything
 
-When you add `cxp` as an MCP server in Claude Code, it uses the `claude` CLI that already ships with your IDE. **No API key needed.** No accounts. No setup beyond a one-line JSON change.
+```bash
+curl -fsSL https://raw.githubusercontent.com/syv-labs/cxp/main/install.sh | sh
+```
+
+This installs the binary, registers the MCP server with both Claude Code and Cursor, and walks you through picking an LLM backend. Claude Code users can choose the **free** Claude Code backend — no API key needed. Anthropic, OpenAI, and NVIDIA are also available; keys are saved to your keychain.
 
 ---
 

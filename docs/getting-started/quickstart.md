@@ -1,49 +1,60 @@
 # Quickstart
 
-## Claude Code — 30 seconds
+## The Recommended Way — 30 Seconds
 
-**1. Install `cxp`** → [Installation](installation.md)
+Run the install script. It handles everything:
 
-**2. Add to `~/.claude/settings.json`:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/syv-labs/cxp/main/install.sh | sh
+```
 
-```json
-{
-  "mcpServers": {
-    "contextpool": {
-      "command": "cxp",
-      "args": ["mcp"]
-    }
-  }
-}
+This installs the binary, registers the MCP server with both Claude Code and Cursor, and runs the backend setup wizard. **Restart your IDE and you're done.**
+
+---
+
+## Manual Setup — Claude Code
+
+If you installed from source or want to update an existing install:
+
+**1. Register the MCP server:**
+
+```bash
+cxp install --skip-cursor
+```
+
+This writes the `contextpool` entry to `~/.claude.json` (Claude Code's global config). Do not use `~/.claude/settings.json` — that file does not support MCP server definitions.
+
+**2. Pick an LLM backend** (if not already done):
+
+```bash
+cxp install --setup
 ```
 
 **3. Restart Claude Code.**
 
-That's it. No API key. `cxp` uses the `claude` CLI that ships with Claude Code automatically.
+No API key is required if you choose the **Claude Code** backend — it uses your existing Claude Code subscription.
 
 ---
 
-## Cursor — 1 minute
+## Manual Setup — Cursor
 
-**1. Install `cxp`**
+**1. Register the MCP server:**
 
-**2. Add to `~/.cursor/mcp.json`** (or **Settings → MCP → Add Server**):
-
-```json
-{
-  "mcpServers": {
-    "contextpool": {
-      "command": "cxp",
-      "args": ["mcp"],
-      "env": {
-        "ANTHROPIC_API_KEY": "sk-ant-..."
-      }
-    }
-  }
-}
+```bash
+cxp install --skip-claude
 ```
 
-Cursor doesn't expose its own auth to subprocesses, so you need to provide one API key. See [Authentication](../reference/environment-variables.md) for all options.
+This writes the `contextpool` entry to `~/.cursor/mcp.json`.
+
+**2. Pick an LLM backend:**
+
+```bash
+cxp install --setup
+```
+
+The chosen key is saved to your system keychain — no need to paste it into `mcp.json`.
+
+**3. Restart Cursor.**
 
 ---
 
@@ -78,7 +89,7 @@ your-project/
             └── index.json
 ```
 
-Each `.summary.md` contains up to 5 structured insights from that session. The next time your agent opens this project, it loads these automatically.
+Each `.summary.md` contains structured insights from that session. Sessions with no high-signal content are skipped — no empty files. The next time your agent opens this project, it loads these automatically.
 
 ---
 

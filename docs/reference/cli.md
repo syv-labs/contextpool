@@ -1,5 +1,34 @@
 # CLI Reference
 
+## `cxp install [OPTIONS]`
+
+Register the contextpool MCP server with Claude Code and Cursor, and configure an LLM backend.
+
+```bash
+cxp install                          # register MCP + run backend wizard
+cxp install --setup                  # re-run just the backend wizard
+cxp install --force                  # overwrite existing MCP entries
+cxp install --skip-claude            # skip Claude Code registration
+cxp install --skip-cursor            # skip Cursor registration
+cxp install --skip-setup             # skip the backend wizard (non-interactive installs)
+cxp install --binary-path <path>     # path to register (defaults to current executable)
+cxp install --claude-json <path>     # override ~/.claude.json path
+cxp install --cursor-mcp <path>      # override ~/.cursor/mcp.json path
+```
+
+The wizard presents four backends as distinct options:
+
+| Choice | Description |
+|---|---|
+| Claude Code | Free, uses your existing Claude Code subscription. Spawns `claude -p`. |
+| Anthropic API | Direct HTTP to the Messages API. Fastest, parallelizes well, works headless. |
+| OpenAI API | OpenAI chat completions. Good if you already have a key. |
+| NVIDIA NIM | OpenAI-compatible endpoint via NVIDIA. |
+
+Keys are saved to the system keychain and a `0600` local file — no env vars required after setup.
+
+---
+
 ## `cxp init`
 
 Extract and store insights from your IDE sessions into the current project.
@@ -24,6 +53,8 @@ cxp init cursor --out ./store             # custom output directory
 cxp init cursor --cursor-dir <path>       # custom ~/.cursor root
 ```
 
+Sessions with no extractable insights are skipped — no empty `.summary.md` files are written.
+
 ---
 
 ## `cxp export`
@@ -37,6 +68,7 @@ cxp export claude-code                     # all Claude Code sessions
 cxp export claude-code --session <path>   # single .jsonl session file
 cxp export claude-code --out ./out        # custom output directory
 cxp export claude-code --claude-dir <path>
+cxp export claude-code --offline          # skip LLM, write fallback summaries
 ```
 
 ### `cxp export cursor [OPTIONS]`
@@ -46,6 +78,7 @@ cxp export cursor                          # all Cursor transcripts
 cxp export cursor --transcript <path>     # single .jsonl file
 cxp export cursor --out ./out             # custom output directory
 cxp export cursor --cursor-dir <path>
+cxp export cursor --offline
 ```
 
 ### `cxp export vscdb [OPTIONS]`
@@ -99,17 +132,19 @@ Push local insights to the team cloud pool.
 
 ```bash
 cxp push
-cxp push --dir ./ContextPool
+cxp push --all      # push all local projects, not just current directory
+cxp push --dry-run  # show what would be pushed without pushing
 ```
 
 ---
 
-## `cxp pull`
+## `cxp pull [OPTIONS]`
 
 Pull team insights to local cache.
 
 ```bash
 cxp pull
+cxp pull --all      # pull all team projects, not just current directory
 ```
 
 ---
@@ -132,3 +167,5 @@ cxp --reset-nvidia-api-key    # clear saved NVIDIA key from keychain
 cxp --version                 # print version
 cxp --help                    # list commands
 ```
+
+To reset Anthropic or OpenAI keys, re-run `cxp install --setup` and choose a new backend.

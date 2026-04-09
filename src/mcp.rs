@@ -105,11 +105,11 @@ impl ContextPoolServer {
         let now = Arc::new(Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true));
 
         // Limit concurrent LLM calls to avoid rate-limit errors.
-        // Override with CXP_CONCURRENCY env var (default 4).
+        // Override with CXP_CONCURRENCY env var (default 8).
         let concurrency = std::env::var("CXP_CONCURRENCY")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(4)
+            .unwrap_or(8)
             .max(1);
         let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
 
