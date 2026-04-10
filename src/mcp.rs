@@ -19,10 +19,13 @@ use rmcp::{
 };
 use walkdir::WalkDir;
 
+use tokio::time::{timeout, Duration};
+
 use crate::{
     embedded_agent::{ContextItem, EmbeddedAgentOptions},
     paths::default_out_dir,
     project::{project_dir, project_id_from_path},
+    team,
 };
 
 #[derive(Clone)]
@@ -63,6 +66,33 @@ impl ContextPoolServer {
             );
         }
 
+        // ── Cloud sync: pull team insights ──
+        let mut sync_status = String::new();
+        let has_api_key = crate::cloud::load_team_api_key().is_some();
+
+        if has_api_key {
+            let team_dir = proj_dir.join("team");
+            match timeout(
+                Duration::from_secs(10),
+                team::pull_insights_to_dir(&project_id, &team_dir),
+            )
+            .await
+            {
+                Ok(Ok(count)) if count > 0 => {
+                    sync_status.push_str(&format!("Pulled {} team insight(s). ", count));
+                }
+                Ok(Ok(_)) => {
+                    sync_status.push_str("Team cloud: up to date. ");
+                }
+                Ok(Err(e)) => {
+                    eprintln!("cloud pull: {e}");
+                }
+                Err(_) => {
+                    eprintln!("cloud pull: timed out");
+                }
+            }
+        }
+
         // Require API key to be pre-configured (keychain / env) — no interactive prompt in MCP.
         let backend = match crate::credentials::load_api_backend() {
             Some(b) => b,
@@ -84,7 +114,23 @@ impl ContextPoolServer {
         let new_files = discover_new_transcripts(&path, &project_id, &already_indexed);
 
         if new_files.is_empty() {
-            return format_context_index(&proj_dir, 0, 0, 0);
+            let mut result = format_context_index(&proj_dir, 0, 0, 0);
+            if has_api_key {
+                let push_pid = project_id.clone();
+                let push_dir = proj_dir.clone();
+                tokio::spawn(async move {
+                    match team::push_insights_from_dir(&push_pid, &push_dir).await {
+                        Ok((ins, _)) if ins > 0 => eprintln!("cloud push: {} new insight(s) synced", ins),
+                        Ok(_) => {}
+                        Err(e) => eprintln!("cloud push: {e}"),
+                    }
+                });
+                sync_status.push_str("Synced with team cloud. ");
+            }
+            if !sync_status.is_empty() {
+                result.push_str(&format!("\n\n{}", sync_status.trim()));
+            }
+            return result;
         }
 
         // Summarize new transcripts in parallel.
@@ -255,6 +301,24 @@ impl ContextPoolServer {
             if errors.len() > 5 {
                 result.push_str(&format!("  ...and {} more\n", errors.len() - 5));
             }
+        }
+
+        // ── Cloud sync: push local insights (background) ──
+        if has_api_key {
+            let push_pid = project_id.clone();
+            let push_dir = proj_dir.clone();
+            tokio::spawn(async move {
+                match team::push_insights_from_dir(&push_pid, &push_dir).await {
+                    Ok((ins, _)) if ins > 0 => eprintln!("cloud push: {} new insight(s) synced", ins),
+                    Ok(_) => {}
+                    Err(e) => eprintln!("cloud push: {e}"),
+                }
+            });
+            sync_status.push_str("Synced with team cloud. ");
+        }
+
+        if !sync_status.is_empty() {
+            result.push_str(&format!("\n\n{}", sync_status.trim()));
         }
 
         result

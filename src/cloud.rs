@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 const KEYRING_SERVICE: &str = "contextpool-team";
 const KEYRING_USER: &str = "api-key";
 const ENV_KEY: &str = "CXP_API_KEY";
-const DEFAULT_API_URL: &str = "https://contextpool-server.onrender.com";
+const DEFAULT_API_URL: &str = "https://contextpool-server-nj1f.onrender.com";
 
 // ── API key storage ─────────────────────────────────────────────────────────
 
