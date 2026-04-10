@@ -367,19 +367,16 @@ pub(crate) fn collect_insights_from_dir(dir: &Path) -> Vec<PushInsight> {
         }
 
         // Second pass: attach tags and file to the insight above them
-        let mut idx = 0usize;
-        let insight_count = insights.len();
-        let start_idx = insight_count.saturating_sub(
+        let start_idx = insights.len().saturating_sub(
             content
                 .lines()
                 .filter(|l| l.trim().starts_with("- **"))
                 .count(),
         );
+        let mut idx = start_idx;
         for line in content.lines() {
             let t = line.trim();
             if t.starts_with("- **") {
-                idx = start_idx + insights[start_idx..].iter().position(|_| true).unwrap_or(0);
-                // This is handled above, just track position
                 idx += 1;
                 continue;
             }
