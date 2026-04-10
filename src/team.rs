@@ -261,7 +261,7 @@ async fn pull_project(project_id: &str, display_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn cache_dir_for_project(project_id: &str) -> std::path::PathBuf {
+pub(crate) fn cache_dir_for_project(project_id: &str) -> std::path::PathBuf {
     dirs::cache_dir()
         .unwrap_or_else(|| dirs::data_local_dir().unwrap_or_else(|| std::path::PathBuf::from(".")))
         .join("contextpool")
@@ -313,7 +313,7 @@ pub async fn cmd_team(args: TeamArgs) -> Result<()> {
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Parse insight lines from `.summary.md` files into structured PushInsight records.
-fn collect_insights_from_dir(dir: &Path) -> Vec<PushInsight> {
+pub(crate) fn collect_insights_from_dir(dir: &Path) -> Vec<PushInsight> {
     let mut insights = Vec::new();
 
     for entry in WalkDir::new(dir).follow_links(false).sort_by_file_name() {
@@ -426,7 +426,7 @@ fn discover_all_project_dirs() -> Result<Vec<(String, std::path::PathBuf)>> {
 }
 
 /// Get the current git user.email for contributor attribution.
-fn git_user_email() -> Option<String> {
+pub(crate) fn git_user_email() -> Option<String> {
     std::process::Command::new("git")
         .args(["config", "user.email"])
         .output()
@@ -443,4 +443,102 @@ fn git_user_email() -> Option<String> {
                 None
             }
         })
+}
+
+// ── Reusable sync helpers (used by MCP auto-sync) ──────────────────────────
+
+/// Pull team insights and write them as a `.summary.md` file into `dest_dir`.
+/// Returns the number of insights pulled, or an error.
+/// Suitable for use from the MCP server (no stdout output).
+pub(crate) async fn pull_insights_to_dir(
+    project_id: &str,
+    dest_dir: &Path,
+) -> Result<usize> {
+    let resp = cloud::pull_insights(project_id).await?;
+    if resp.insights.is_empty() {
+        return Ok(0);
+    }
+
+    fs::create_dir_all(dest_dir)?;
+
+    // Format as .summary.md so search_summaries picks it up automatically
+    let mut md = String::from(
+        "# Summary\n\n\
+         ## Metadata\n\
+         - **Source:** Team cloud\n\
+         - **Session:** team-insights\n\n\
+         ## Extracted insights\n\n",
+    );
+
+    for ins in &resp.insights {
+        let ty = if ins.r#type.is_empty() { "insight" } else { &ins.r#type };
+        md.push_str(&format!(
+            "- **{}** {} — {}\n",
+            ty, ins.title, ins.summary,
+        ));
+        if let Some(f) = &ins.file {
+            if !f.is_empty() {
+                md.push_str(&format!("  - file: `{}`\n", f));
+            }
+        }
+        if !ins.tags.is_empty() {
+            md.push_str(&format!("  - tags: {}\n", ins.tags.join(", ")));
+        }
+    }
+
+    let out_path = dest_dir.join("team-insights.summary.md");
+    fs::write(&out_path, &md)?;
+
+    // Also write to the legacy cache dir for CLI compatibility
+    let cache_dir = cache_dir_for_project(project_id);
+    let _ = fs::create_dir_all(&cache_dir);
+    let mut legacy_md = String::from("# Team Insights\n\n");
+    for ins in &resp.insights {
+        let ty = if ins.r#type.is_empty() { "insight" } else { &ins.r#type };
+        legacy_md.push_str(&format!(
+            "- **{}** {} — {}\n  - contributor: {}\n  - tags: {}\n",
+            ty,
+            ins.title,
+            ins.summary,
+            ins.contributor,
+            ins.tags.join(", ")
+        ));
+        if let Some(f) = &ins.file {
+            if !f.is_empty() {
+                legacy_md.push_str(&format!("  - file: `{}`\n", f));
+            }
+        }
+    }
+    let _ = fs::write(cache_dir.join("team-insights.md"), &legacy_md);
+
+    Ok(resp.insights.len())
+}
+
+/// Push local insights from `proj_dir` to the cloud. Returns (inserted, skipped).
+/// Suitable for background use from MCP server (no stdout output).
+pub(crate) async fn push_insights_from_dir(
+    project_id: &str,
+    proj_dir: &Path,
+) -> Result<(u64, u64)> {
+    let insights = collect_insights_from_dir(proj_dir);
+    if insights.is_empty() {
+        return Ok((0, 0));
+    }
+
+    let display_name = project_id
+        .rsplit('-')
+        .next()
+        .unwrap_or(project_id)
+        .to_string();
+
+    let req = PushRequest {
+        project_id: project_id.to_string(),
+        project_display_name: Some(display_name),
+        source_ide: None,
+        contributor: git_user_email(),
+        insights,
+    };
+
+    let resp = cloud::push_insights(&req).await?;
+    Ok((resp.inserted, resp.skipped))
 }
