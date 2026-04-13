@@ -9,6 +9,7 @@ use chrono::{SecondsFormat, Utc};
 use std::{
     ffi::OsStr,
     fs,
+    io::{self, Write},
     path::{Path, PathBuf},
 };
 use walkdir::WalkDir;
@@ -33,18 +34,34 @@ pub async fn export_claude_code(args: ExportClaudeCodeArgs) -> Result<()> {
     };
 
     let mut index: Vec<ExportedItem> = Vec::new();
+    let total = session_paths.len();
 
-    for path in session_paths {
-        let raw = fs::read_to_string(&path).with_context(|| format!("Reading {}", path.display()))?;
+    for (i, path) in session_paths.iter().enumerate() {
+        let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("session");
+        eprint!("  [{}/{}] {}... ", i + 1, total, name);
+        let _ = io::stderr().flush();
+
+        let raw = fs::read_to_string(path).with_context(|| format!("Reading {}", path.display()))?;
         let extracted = extract_text_from_jsonl(&raw);
 
         let summary = if args.offline {
+            eprintln!("offline");
             fallback_summary(&extracted)
         } else {
             match summarize_embedded(&extracted).await {
-                Ok(Some(s)) => s,
-                Ok(None) => continue, // no insights — skip file
-                Err(_) => fallback_summary(&extracted),
+                Ok(Some(s)) => {
+                    let count = s.lines().filter(|l| l.trim().starts_with("- **")).count();
+                    eprintln!("{} insight(s)", count);
+                    s
+                }
+                Ok(None) => {
+                    eprintln!("no insights");
+                    continue; // no insights — skip file
+                }
+                Err(_) => {
+                    eprintln!("error, using fallback");
+                    fallback_summary(&extracted)
+                }
             }
         };
 
@@ -130,17 +147,44 @@ pub async fn export_claude_code_project_sessions(
     };
 
     let mut index: Vec<ExportedItem> = Vec::new();
+    let total = session_paths.len();
 
-    for path in session_paths {
-        let raw = fs::read_to_string(&path).with_context(|| format!("Reading {}", path.display()))?;
+    if total == 0 {
+        let index_path = run_dir.join("index.json");
+        fs::write(&index_path, "[]")?;
+        return Ok(0);
+    }
+
+    eprintln!();
+    eprintln!("  Summarizing {} session(s)...", total);
+
+    for (i, path) in session_paths.iter().enumerate() {
+        let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("session");
+        eprint!("  [{}/{}] {}... ", i + 1, total, name);
+        let _ = io::stderr().flush();
+
+        let raw = fs::read_to_string(path).with_context(|| format!("Reading {}", path.display()))?;
         let extracted = extract_text_from_jsonl(&raw);
 
         let summary = match summarize_embedded(&extracted)
             .await
             .with_context(|| format!("Summarization failed for {}", path.display()))?
         {
-            Some(s) => s,
-            None => continue, // no insights — skip file
+            Some(s) => {
+                let count = s.lines().filter(|l| l.trim().starts_with("- **")).count();
+                eprintln!("{} insight(s)", count);
+                for line in s.lines() {
+                    let t = line.trim();
+                    if t.starts_with("- **") {
+                        eprintln!("      {}", t);
+                    }
+                }
+                s
+            }
+            None => {
+                eprintln!("no insights");
+                continue; // no insights — skip file
+            }
         };
 
         let safe_name = path

@@ -628,7 +628,13 @@ pub async fn generate_context_items(
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(20_000);
     if chat.len() > max_chars {
-        chat.truncate(max_chars);
+        // Find the nearest char boundary at or before max_chars to avoid
+        // panicking on multi-byte UTF-8 characters.
+        let mut end = max_chars;
+        while !chat.is_char_boundary(end) && end > 0 {
+            end -= 1;
+        }
+        chat.truncate(end);
         // Trim to the last newline so we don't cut mid-sentence.
         if let Some(pos) = chat.rfind('\n') {
             chat.truncate(pos);
