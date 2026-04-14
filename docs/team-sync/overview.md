@@ -40,7 +40,7 @@ Insights are deduplicated by content hash — pushing the same insight twice doe
 | Insights | 1,000 | Unlimited |
 | Projects | 5 | Unlimited |
 | Members | 3 | Unlimited |
-| Price | Free | [contextpool.dev/pricing](https://contextpool.dev/pricing) |
+| Price | Free | [contextpool.io](https://contextpool.io) |
 
 ---
 
