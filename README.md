@@ -139,7 +139,7 @@ The agent follows smart rules automatically:
 
 Share insights across your whole team. Every engineer's discoveries become team knowledge.
 
-**Get started at [contextpool.dev](https://contextpool.dev) → Sign in with GitHub → Copy your team key.**
+**Get started at [contextpool.io](https://contextpool.io) → Sign in with GitHub → Copy your team key.**
 
 ```bash
 # Authenticate
@@ -159,7 +159,7 @@ cxp team projects
 After `cxp pull`, the agent automatically searches team insights alongside your own. If a teammate already hit the same bug, your agent knows.
 
 **Free tier:** 1,000 insights · 5 projects · 3 members
-**Paid:** Unlimited — [contextpool.dev/pricing](https://contextpool.dev/pricing)
+**Paid:** Unlimited — [contextpool.io](https://contextpool.io)
 
 ### Team env vars
 

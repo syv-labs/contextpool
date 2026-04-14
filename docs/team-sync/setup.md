@@ -2,7 +2,7 @@
 
 ## 1. Create Your Team
 
-Go to [contextpool.dev](https://contextpool.dev) and click **Get Started**. Sign in with GitHub — your team is created automatically and your API key is shown on the dashboard.
+Go to [contextpool.io](https://contextpool.io) and click **Get Started**. Sign in with GitHub — your team is created automatically and your API key is shown on the dashboard.
 
 Copy your team key. It looks like: `cxp_team_4c4143d879ce471ab14afacb081a7b4f`
 

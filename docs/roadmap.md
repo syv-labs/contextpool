@@ -20,7 +20,7 @@ A native sidebar panel for browsing and searching your `ContextPool/` summaries 
 ## Medium-Term
 
 ### Web Dashboard
-The web dashboard is live at [contextpool.dev](https://contextpool.dev). Sign in with GitHub to create a team, manage members, and view team insights. Billing and subscription management are available in the dashboard.
+The web dashboard is live at [contextpool.io](https://contextpool.io). Sign in with GitHub to create a team, manage members, and view team insights. Billing and subscription management are available in the dashboard.
 
 ### More IDE Sources
 Planned support for:
