@@ -40,7 +40,7 @@ cxp install --setup    # re-run the wizard and pick a new backend
 | Variable | Default | Description |
 |---|---|---|
 | `CXP_API_KEY` | — | Team API key. Alternative to `cxp auth` — useful in CI or containers. |
-| `CXP_API_URL` | `https://api.contextpool.dev` | Override the API endpoint. Use for self-hosted servers or local dev. |
+| `CXP_API_URL` | `https://contextpool-server-nj1f.onrender.com` | Override the API endpoint. Use for self-hosted servers or local dev. |
 
 ---
 

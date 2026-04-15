@@ -116,12 +116,14 @@ cxp mcp --data-dir ./ContextPool   # custom data directory
 
 ---
 
-## `cxp auth <team-key>`
+## `cxp auth [team-key] [OPTIONS]`
 
 Authenticate with a ContextPool team API key.
 
 ```bash
-cxp auth cxp_team_4c4143d879ce471ab14afacb081a7b4f
+cxp auth cxp_team_4c4143d879ce471ab14afacb081a7b4f   # save key to keychain
+cxp auth --status                                      # show current auth status
+cxp auth --logout                                      # remove stored API key
 ```
 
 ---

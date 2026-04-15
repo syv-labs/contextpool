@@ -324,6 +324,11 @@ pub(crate) fn collect_insights_from_dir(dir: &Path) -> Vec<PushInsight> {
         if !e.file_name().to_str().unwrap_or("").ends_with(".summary.md") {
             continue;
         }
+        // Skip team/ subdirectory — those files were pulled FROM the cloud and
+        // must not be pushed back (would cause duplicates on format round-trip).
+        if e.path().components().any(|c| c.as_os_str() == "team") {
+            continue;
+        }
         let Ok(content) = fs::read_to_string(e.path()) else {
             continue;
         };

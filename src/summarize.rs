@@ -1,13 +1,4 @@
 use anyhow::Result;
-use std::{
-    io::{self, Write},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    thread,
-    time::Duration,
-};
 
 use crate::{credentials::{ensure_nvidia_api_key_interactive, load_api_backend, ApiBackend}, embedded_agent, redact::redact_secrets};
 
@@ -34,40 +25,7 @@ pub async fn summarize_embedded(text: &str) -> Result<Option<String>> {
     let redacted = redact_secrets(text);
     let opts = embedded_agent::EmbeddedAgentOptions::from_env(backend);
 
-    // CLI feedback: show progress while the model is generating.
-    // (We avoid adding a spinner dependency by printing dots from a background thread.)
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop_bg = stop.clone();
-    let label = "Generating summary";
-    let bg = thread::spawn(move || {
-        let mut dots: usize = 0;
-        while !stop_bg.load(Ordering::SeqCst) {
-            dots = (dots + 1) % 4;
-            let trail = ".".repeat(dots + 1);
-            let _ = write!(
-                io::stderr(),
-                "\r{}{}{}",
-                label,
-                trail,
-                "   " // erase remnants
-            );
-            let _ = io::stderr().flush();
-            thread::sleep(Duration::from_millis(180));
-        }
-
-        // Clear the line so the next log/output starts cleanly.
-        let _ = write!(io::stderr(), "\r{}... done\n", label);
-        let _ = io::stderr().flush();
-    });
-
-    let (items, debug_raw) = {
-        let res = embedded_agent::generate_context_items(&redacted, &[], "", &opts).await;
-        stop.store(true, Ordering::SeqCst);
-        res
-    }?;
-
-    // Best-effort join: if the indicator thread is already done, joining is quick.
-    let _ = bg.join();
+    let (items, debug_raw) = embedded_agent::generate_context_items(&redacted, &[], "", &opts).await?;
 
     if items.is_empty() {
         return Ok(None);

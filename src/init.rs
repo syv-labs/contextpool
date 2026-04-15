@@ -10,7 +10,6 @@ use crate::{
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
 use std::{fs, path::Path};
-use walkdir::WalkDir;
 
 pub async fn init_claude_code(args: InitClaudeCodeArgs) -> Result<()> {
     let cwd = std::env::current_dir().context("Could not determine current directory")?;
@@ -104,78 +103,11 @@ pub async fn init_cursor(args: InitCursorArgs) -> Result<()> {
     Ok(())
 }
 
-/// Print a rich preview of extracted insights after init.
+/// Print a summary after init.
 fn print_aha_preview(proj_dir: &Path, source: &str, sessions_imported: usize) {
-    // Collect all insights from summary files
-    let mut insights: Vec<(String, String)> = Vec::new(); // (type, title_or_summary)
-
-    for entry in WalkDir::new(proj_dir).follow_links(false).sort_by_file_name() {
-        let Ok(e) = entry else { continue };
-        if !e.file_type().is_file() {
-            continue;
-        }
-        if !e.file_name().to_str().unwrap_or("").ends_with(".summary.md") {
-            continue;
-        }
-        let Ok(content) = fs::read_to_string(e.path()) else {
-            continue;
-        };
-
-        for line in content.lines() {
-            let t = line.trim();
-            // Parse "- **type** Title — summary" lines
-            if let Some(rest) = t.strip_prefix("- **") {
-                if let Some(end_bold) = rest.find("**") {
-                    let ty = rest[..end_bold].to_string();
-                    let after = rest[end_bold + 2..].trim().to_string();
-                    if !after.is_empty() {
-                        insights.push((ty, after));
-                    }
-                }
-            }
-        }
-    }
-
-    let summary_count = WalkDir::new(proj_dir)
-        .follow_links(false)
-        .into_iter()
-        .flatten()
-        .filter(|e| {
-            e.file_type().is_file()
-                && e.file_name().to_str().unwrap_or("").ends_with(".summary.md")
-        })
-        .count();
-
     println!();
     println!("  Found {} {} session(s) for this project.", sessions_imported, source);
-    println!(
-        "  Summarized {} session(s) -> {} insight(s) extracted.",
-        summary_count,
-        insights.len()
-    );
-
-    if !insights.is_empty() {
-        println!();
-        println!("  Top insights:");
-        for (ty, text) in insights.iter().take(8) {
-            // Truncate long lines for terminal display
-            let display = if text.len() > 100 {
-                format!("{}...", &text[..97])
-            } else {
-                text.clone()
-            };
-            println!("    {}: {}", ty, display);
-        }
-        if insights.len() > 8 {
-            println!("    ...and {} more", insights.len() - 8);
-        }
-    }
-
-    println!();
     println!("  Your agent will now recall these automatically via MCP.");
-    println!(
-        "  Stored at: {}",
-        proj_dir.display()
-    );
+    println!("  Stored at: {}", proj_dir.display());
     println!();
 }

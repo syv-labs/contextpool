@@ -1,6 +1,6 @@
 # Team Commands
 
-## `cxp auth <team-key>`
+## `cxp auth`
 
 Authenticate with your team API key. The key is saved to the system keychain, or you can use `CXP_API_KEY` env var instead.
 
@@ -8,6 +8,9 @@ Authenticate with your team API key. The key is saved to the system keychain, or
 cxp auth cxp_team_4c4143d879ce471ab14afacb081a7b4f
 # Authenticated as: your-team-name (free plan)
 # Key saved.
+
+cxp auth --status    # show current auth status
+cxp auth --logout    # remove stored API key from keychain
 ```
 
 ---
@@ -18,6 +21,8 @@ Push local insights to the team pool.
 
 ```bash
 cxp push             # push from current project's ContextPool/
+cxp push --all       # push all local projects, not just current directory
+cxp push --dry-run   # show what would be pushed without pushing
 cxp push --dir ./ContextPool   # custom ContextPool directory
 ```
 
@@ -79,4 +84,4 @@ cxp team projects
 | Variable | Description |
 |---|---|
 | `CXP_API_KEY` | Team API key (alternative to keychain) |
-| `CXP_API_URL` | Override the API endpoint (default: `https://api.contextpool.dev`) |
+| `CXP_API_URL` | Override the API endpoint (default: `https://contextpool-server-nj1f.onrender.com`) |

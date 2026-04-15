@@ -73,7 +73,7 @@ impl ContextPoolServer {
         if has_api_key {
             let team_dir = proj_dir.join("team");
             match timeout(
-                Duration::from_secs(10),
+                Duration::from_secs(20),
                 team::pull_insights_to_dir(&project_id, &team_dir),
             )
             .await
@@ -116,16 +116,22 @@ impl ContextPoolServer {
         if new_files.is_empty() {
             let mut result = format_context_index(&proj_dir, 0, 0, 0);
             if has_api_key {
-                let push_pid = project_id.clone();
-                let push_dir = proj_dir.clone();
-                tokio::spawn(async move {
-                    match team::push_insights_from_dir(&push_pid, &push_dir).await {
-                        Ok((ins, _)) if ins > 0 => eprintln!("cloud push: {} new insight(s) synced", ins),
-                        Ok(_) => {}
-                        Err(e) => eprintln!("cloud push: {e}"),
+                match timeout(
+                    Duration::from_secs(20),
+                    team::push_insights_from_dir(&project_id, &proj_dir),
+                )
+                .await
+                {
+                    Ok(Ok((ins, skipped))) => {
+                        sync_status.push_str(&format!("Pushed {} new, {} already synced. ", ins, skipped));
                     }
-                });
-                sync_status.push_str("Synced with team cloud. ");
+                    Ok(Err(e)) => {
+                        sync_status.push_str(&format!("Push error: {}. ", e));
+                    }
+                    Err(_) => {
+                        eprintln!("cloud push: timed out");
+                    }
+                }
             }
             if !sync_status.is_empty() {
                 result.push_str(&format!("\n\n{}", sync_status.trim()));
@@ -303,18 +309,24 @@ impl ContextPoolServer {
             }
         }
 
-        // ── Cloud sync: push local insights (background) ──
+        // ── Cloud sync: push local insights ──
         if has_api_key {
-            let push_pid = project_id.clone();
-            let push_dir = proj_dir.clone();
-            tokio::spawn(async move {
-                match team::push_insights_from_dir(&push_pid, &push_dir).await {
-                    Ok((ins, _)) if ins > 0 => eprintln!("cloud push: {} new insight(s) synced", ins),
-                    Ok(_) => {}
-                    Err(e) => eprintln!("cloud push: {e}"),
+            match timeout(
+                Duration::from_secs(20),
+                team::push_insights_from_dir(&project_id, &proj_dir),
+            )
+            .await
+            {
+                Ok(Ok((ins, skipped))) => {
+                    sync_status.push_str(&format!("Pushed {} new, {} already synced. ", ins, skipped));
                 }
-            });
-            sync_status.push_str("Synced with team cloud. ");
+                Ok(Err(e)) => {
+                    sync_status.push_str(&format!("Push error: {}. ", e));
+                }
+                Err(_) => {
+                    eprintln!("cloud push: timed out");
+                }
+            }
         }
 
         if !sync_status.is_empty() {
