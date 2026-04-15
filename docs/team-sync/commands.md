@@ -23,6 +23,7 @@ Push local insights to the team pool.
 cxp push             # push from current project's ContextPool/
 cxp push --all       # push all local projects, not just current directory
 cxp push --dry-run   # show what would be pushed without pushing
+cxp push --dir ./ContextPool   # custom ContextPool directory
 ```
 
 What happens:
