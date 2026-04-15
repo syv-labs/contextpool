@@ -73,7 +73,7 @@ impl ContextPoolServer {
         if has_api_key {
             let team_dir = proj_dir.join("team");
             match timeout(
-                Duration::from_secs(10),
+                Duration::from_secs(20),
                 team::pull_insights_to_dir(&project_id, &team_dir),
             )
             .await
@@ -116,12 +116,20 @@ impl ContextPoolServer {
         if new_files.is_empty() {
             let mut result = format_context_index(&proj_dir, 0, 0, 0);
             if has_api_key {
-                match team::push_insights_from_dir(&project_id, &proj_dir).await {
-                    Ok((ins, skipped)) => {
+                match timeout(
+                    Duration::from_secs(20),
+                    team::push_insights_from_dir(&project_id, &proj_dir),
+                )
+                .await
+                {
+                    Ok(Ok((ins, skipped))) => {
                         sync_status.push_str(&format!("Pushed {} new, {} already synced. ", ins, skipped));
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         sync_status.push_str(&format!("Push error: {}. ", e));
+                    }
+                    Err(_) => {
+                        eprintln!("cloud push: timed out");
                     }
                 }
             }
@@ -303,12 +311,20 @@ impl ContextPoolServer {
 
         // ── Cloud sync: push local insights ──
         if has_api_key {
-            match team::push_insights_from_dir(&project_id, &proj_dir).await {
-                Ok((ins, skipped)) => {
+            match timeout(
+                Duration::from_secs(20),
+                team::push_insights_from_dir(&project_id, &proj_dir),
+            )
+            .await
+            {
+                Ok(Ok((ins, skipped))) => {
                     sync_status.push_str(&format!("Pushed {} new, {} already synced. ", ins, skipped));
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     sync_status.push_str(&format!("Push error: {}. ", e));
+                }
+                Err(_) => {
+                    eprintln!("cloud push: timed out");
                 }
             }
         }
