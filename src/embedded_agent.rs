@@ -446,7 +446,7 @@ async fn call_chat(
     max_tokens: u32,
 ) -> Result<String> {
     let result = match backend {
-        ApiBackend::ClaudeCodeCli => call_claude_cli(system, user).await,
+        ApiBackend::ClaudeCodeCli => call_claude_cli(system, user, model).await,
         ApiBackend::Anthropic(key) => {
             call_anthropic_chat(client, key, model, system, user, max_tokens).await
         }
@@ -464,7 +464,7 @@ async fn call_chat(
         Err(e) if is_transient_error(&e) => {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             match backend {
-                ApiBackend::ClaudeCodeCli => call_claude_cli(system, user).await,
+                ApiBackend::ClaudeCodeCli => call_claude_cli(system, user, model).await,
                 ApiBackend::Anthropic(key) => {
                     call_anthropic_chat(client, key, model, system, user, max_tokens).await
                 }
@@ -591,11 +591,13 @@ async fn call_openai_chat(
         .join(""))
 }
 
-async fn call_claude_cli(system: &str, user: &str) -> Result<String> {
+async fn call_claude_cli(system: &str, user: &str, model: &str) -> Result<String> {
     let combined = format!("{}\n\n{}", system.trim(), user.trim());
     let output = tokio::process::Command::new("claude")
         .arg("-p")
         .arg(&combined)
+        .arg("--model")
+        .arg(model)
         .stdin(std::process::Stdio::null())
         .output()
         .await

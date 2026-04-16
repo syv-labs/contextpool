@@ -238,6 +238,8 @@ impl ContextPoolServer {
                     "Claude Code"
                 } else if src.contains(".cursor/") {
                     "Cursor"
+                } else if src.contains(".codex/") {
+                    "Codex"
                 } else {
                     "Unknown"
                 };
@@ -433,7 +435,7 @@ impl ServerHandler for ContextPoolServer {
             tools: vec![
                 Tool {
                     name: "fetch_project_context".into(),
-                    description: "Discover and summarize new Cursor and Claude Code transcripts \
+                    description: "Discover and summarize new Cursor, Claude Code, and Codex transcripts \
                          for this project. Stores summaries locally in <project>/ContextPool/. \
                          Returns only a session count and topic list — NOT the summaries themselves. \
                          Call this once per conversation to ensure indexing is current, then use \
@@ -630,6 +632,22 @@ impl ServerHandler for ContextPoolServer {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+/// Normalize a path lexically (resolve `.` and `..`) without filesystem access.
+/// Avoids macOS TCC permission prompts triggered by `canonicalize` on protected
+/// directories (Documents, Downloads, etc.).
+fn normalize_path_lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => { out.pop(); }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// Write `content` to `path` atomically via a sibling `.tmp` file + rename.
 /// On POSIX, `rename(2)` is atomic: readers never see a partial write.
 fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
@@ -712,7 +730,7 @@ fn collect_indexed_source_paths(proj_dir: &Path) -> HashSet<String> {
     paths
 }
 
-/// Find Cursor and Claude Code transcript files for `project_id` / `project_path`
+/// Find Cursor, Claude Code, and Codex transcript files for `project_id` / `project_path`
 /// that aren't in `already_indexed`.
 fn discover_new_transcripts(
     project_path: &Path,
@@ -738,7 +756,58 @@ fn discover_new_transcripts(
         collect_jsonl_files(&root, already_indexed, &mut new_files);
     }
 
+    // Codex: ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl (matched by cwd in session_meta)
+    if let Some(codex_dir) = crate::paths::default_codex_dir() {
+        discover_codex_transcripts(&codex_dir, project_path, already_indexed, &mut new_files);
+    }
+
     new_files
+}
+
+/// Discover Codex sessions whose `cwd` matches `project_path`.
+///
+/// Unlike Claude Code / Cursor, Codex stores all sessions in a flat date-based
+/// directory tree. We read the first line (`session_meta`) of each JSONL file to
+/// extract the `cwd` and check whether it matches (or is a child of) the project.
+fn discover_codex_transcripts(
+    codex_dir: &Path,
+    project_path: &Path,
+    already_indexed: &HashSet<String>,
+    out: &mut Vec<PathBuf>,
+) {
+    let sessions_root = codex_dir.join("sessions");
+    if !sessions_root.exists() {
+        return;
+    }
+    let canonical_project = std::fs::canonicalize(project_path)
+        .unwrap_or_else(|_| normalize_path_lexical(project_path));
+    let lexical_project = normalize_path_lexical(project_path);
+
+    for entry in WalkDir::new(&sessions_root).follow_links(false) {
+        let Ok(e) = entry else { continue };
+        if !e.file_type().is_file() {
+            continue;
+        }
+        if e.path().extension() != Some(OsStr::new("jsonl")) {
+            continue;
+        }
+        let path_str = e.path().to_string_lossy().to_string();
+        if already_indexed.contains(&path_str) {
+            continue;
+        }
+        // Read the session_meta line to check the cwd.
+        // Use lexical normalization — avoids filesystem access on arbitrary
+        // paths from session metadata, which triggers macOS TCC permission
+        // prompts for protected directories (Documents, Downloads, etc.).
+        if let Some(cwd) = crate::transcript::extract_codex_cwd(e.path()) {
+            let normalized_cwd = normalize_path_lexical(std::path::Path::new(&cwd));
+            if normalized_cwd.starts_with(&canonical_project)
+                || normalized_cwd.starts_with(&lexical_project)
+            {
+                out.push(e.into_path());
+            }
+        }
+    }
 }
 
 fn collect_jsonl_files(
@@ -869,7 +938,7 @@ fn format_context_index(
     };
 
     format!(
-        "{status}. {count} session(s) stored locally (Claude Code + Cursor).{topics}\n\
+        "{status}. {count} session(s) stored locally (Claude Code + Cursor + Codex).{topics}\n\
          Use search_context(\"keyword\") to find relevant insights.",
         status = parts.join(". "),
         count = summary_count,

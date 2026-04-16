@@ -60,6 +60,27 @@ pub fn default_claude_code_dir() -> Option<PathBuf> {
     None
 }
 
+pub fn default_codex_dir() -> Option<PathBuf> {
+    // Respect $CODEX_HOME if set (Codex CLI allows overriding the data directory).
+    if let Ok(codex_home) = std::env::var("CODEX_HOME") {
+        let p = PathBuf::from(&codex_home);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+
+    let home = dirs::home_dir()?;
+    let candidate = home.join(".codex");
+    if candidate.join("sessions").exists() {
+        return Some(candidate);
+    }
+    // Return the path even if sessions/ doesn't exist yet so callers can report a useful error.
+    if candidate.exists() {
+        return Some(candidate);
+    }
+    None
+}
+
 pub fn default_workspace_storage_dir(product: &str) -> Option<PathBuf> {
     let product = if product.trim().is_empty() {
         "Cursor"
