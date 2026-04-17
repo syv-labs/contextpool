@@ -30,12 +30,14 @@ async fn main() -> Result<()> {
             InitSource::Cursor(args) => init::init_cursor(args).await,
             InitSource::ClaudeCode(args) => init::init_claude_code(args).await,
             InitSource::Kiro(args) => init::init_kiro(args).await
+            InitSource::Codex(args) => init::init_codex(args).await,
         },
         Command::Export(args) => match args.source {
             ExportSource::Cursor(args) => export::cursor::export_cursor(args).await,
             ExportSource::ClaudeCode(args) => export::claude_code::export_claude_code(args).await,
             ExportSource::Vscdb(args) => export::vscdb::export_vscdb(args).await,
             ExportSource::Kiro(args) => export::kiro::export_kiro(args).await,
+            ExportSource::Codex(args) => export::codex::export_codex(args).await,
         },
         Command::Mcp(McpArgs { data_dir }) => mcp::run_server(data_dir).await,
         Command::Auth(args) => team::cmd_auth(args).await,

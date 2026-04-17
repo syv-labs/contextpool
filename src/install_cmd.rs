@@ -12,6 +12,7 @@ use std::{
     io::{self, BufRead, IsTerminal, Write},
     path::{Path, PathBuf},
 };
+use toml_edit::{value, Array, DocumentMut, Item, Table};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -56,6 +57,53 @@ fn default_cursor_mcp_json() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".cursor")
         .join("mcp.json")
+}
+
+fn default_codex_config_toml() -> PathBuf {
+    // Respect $CODEX_HOME if set (Codex CLI allows overriding the data directory).
+    if let Ok(codex_home) = std::env::var("CODEX_HOME") {
+        return PathBuf::from(codex_home).join("config.toml");
+    }
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".codex")
+        .join("config.toml")
+}
+
+fn configure_codex(config_toml: &Path, binary_path: &str, force: bool) -> Result<bool> {
+    // Read or create the TOML document.
+    let raw = if config_toml.exists() {
+        fs::read_to_string(config_toml)
+            .with_context(|| format!("Reading {}", config_toml.display()))?
+    } else {
+        String::new()
+    };
+
+    let mut doc = raw.parse::<DocumentMut>()
+        .with_context(|| format!("Parsing TOML in {}", config_toml.display()))?;
+
+    // Ensure [mcp_servers] table exists.
+    if !doc.contains_key("mcp_servers") {
+        doc["mcp_servers"] = Item::Table(Table::new());
+    }
+    let mcp_servers = doc["mcp_servers"].as_table_mut()
+        .context("[mcp_servers] is not a table")?;
+
+    if mcp_servers.contains_key("contextpool") && !force {
+        return Ok(false);
+    }
+
+    // Build the [mcp_servers.contextpool] entry.
+    let mut entry = Table::new();
+    entry["command"] = value(binary_path);
+    let mut args = Array::new();
+    args.push("mcp");
+    entry["args"] = value(args);
+
+    mcp_servers["contextpool"] = Item::Table(entry);
+
+    atomic_write(config_toml, &doc.to_string())?;
+    Ok(true)
 }
 
 fn configure_claude_code(claude_json: &Path, binary_path: &str, force: bool) -> Result<bool> {
@@ -253,9 +301,10 @@ pub fn cmd_install(args: InstallArgs) -> Result<()> {
             .to_string()
     };
 
-    let claude_json = args.claude_json.unwrap_or_else(default_claude_json);
-    let cursor_mcp  = args.cursor_mcp.unwrap_or_else(default_cursor_mcp_json);
-    let force       = args.force;
+    let claude_json      = args.claude_json.unwrap_or_else(default_claude_json);
+    let cursor_mcp       = args.cursor_mcp.unwrap_or_else(default_cursor_mcp_json);
+    let codex_config     = default_codex_config_toml();
+    let force            = args.force;
 
     let mut configured_any = false;
 
@@ -273,6 +322,14 @@ pub fn cmd_install(args: InstallArgs) -> Result<()> {
             Ok(true)  => { println!("✓ Cursor — added contextpool to {}", cursor_mcp.display()); configured_any = true; }
             Ok(false) => { println!("  Cursor — contextpool already in {} (use --force to overwrite)", cursor_mcp.display()); }
             Err(e)    => { eprintln!("✗ Cursor — failed to update {}: {e}", cursor_mcp.display()); }
+        }
+    }
+
+    if !args.skip_codex {
+        match configure_codex(&codex_config, &binary_path, force) {
+            Ok(true)  => { println!("✓ Codex — added contextpool to {}", codex_config.display()); configured_any = true; }
+            Ok(false) => { println!("  Codex — contextpool already in {} (use --force to overwrite)", codex_config.display()); }
+            Err(e)    => { eprintln!("✗ Codex — failed to update {}: {e}", codex_config.display()); }
         }
     }
 

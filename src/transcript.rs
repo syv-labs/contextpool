@@ -20,7 +20,13 @@ pub fn extract_text_from_jsonl(jsonl: &str) -> String {
             continue;
         };
 
-        if let Some(text) = try_claude_code(&v) {
+        // Try Codex first: its lines always have a `payload` object and a `timestamp`
+        // field, which distinguishes them from Claude Code / Cursor formats. If Codex
+        // isn't tried first, the Claude Code parser's catch-all swallows Codex lines
+        // (both use a top-level `type` field).
+        if let Some(text) = try_codex(&v) {
+            out.push_str(&text);
+        } else if let Some(text) = try_claude_code(&v) {
             out.push_str(&text);
         } else if let Some(text) = try_cursor(&v) {
             out.push_str(&text);
@@ -135,6 +141,79 @@ fn try_cursor(v: &serde_json::Value) -> Option<String> {
     }
 
     Some(format!("{role}: {text}\n\n"))
+}
+
+// ── Codex CLI schema ─────────────────────────────────────────────────────────
+
+/// Codex JSONL line: top-level `type` is one of:
+/// - `"event_msg"` with `payload.type` = `"user_message"` or `"agent_message"`
+/// - `"session_meta"`, `"response_item"`, `"turn_context"` (all skipped)
+///
+/// We extract text exclusively from `event_msg` records to avoid duplicating
+/// content that also appears in `response_item/message` lines and to skip
+/// developer system prompts entirely.
+fn try_codex(v: &serde_json::Value) -> Option<String> {
+    // Guard: Codex lines always carry both `timestamp` and `payload` at the top level.
+    // This distinguishes them from Claude Code lines (which have `type` + `message`)
+    // and Cursor lines (which have `role` + `message`).
+    if v.get("timestamp").is_none() || v.get("payload").is_none() {
+        return None;
+    }
+
+    let record_type = v.get("type")?.as_str()?;
+
+    match record_type {
+        "event_msg" => {
+            let payload = v.get("payload")?;
+            let event_type = payload.get("type")?.as_str()?;
+            match event_type {
+                "user_message" => {
+                    let msg = payload.get("message")?.as_str()?.trim();
+                    if msg.is_empty() {
+                        return Some(String::new());
+                    }
+                    Some(format!("User: {msg}\n\n"))
+                }
+                "agent_message" => {
+                    let msg = payload.get("message")?.as_str()?.trim();
+                    if msg.is_empty() {
+                        return Some(String::new());
+                    }
+                    Some(format!("Assistant: {msg}\n\n"))
+                }
+                // Known-but-unneeded event types: swallow silently
+                _ => Some(String::new()),
+            }
+        }
+        // Known Codex record types that carry no user/assistant text
+        "session_meta" | "response_item" | "turn_context" => Some(String::new()),
+        _ => None,
+    }
+}
+
+/// Read the `cwd` field from the first `session_meta` line of a Codex JSONL file.
+///
+/// Returns `None` if the file cannot be read or doesn't have a `session_meta` record.
+pub fn extract_codex_cwd(path: &std::path::Path) -> Option<String> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(path).ok()?;
+    let reader = std::io::BufReader::new(file);
+    for line in reader.lines().take(5) {
+        let line = line.ok()?;
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        let v: serde_json::Value = serde_json::from_str(&line).ok()?;
+        if v.get("type")?.as_str()? == "session_meta" {
+            return v
+                .get("payload")?
+                .get("cwd")?
+                .as_str()
+                .map(|s| s.to_string());
+        }
+    }
+    None
 }
 
 /// Kiro JSONL line: top-level `kind` is "Prompt" or "AssistantMessage".

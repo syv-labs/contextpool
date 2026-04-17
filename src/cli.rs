@@ -105,6 +105,8 @@ pub enum InitSource {
     ClaudeCode(InitClaudeCodeArgs),
 
     Kiro(InitKiroArgs),
+    /// Initialize memory from Codex for the current directory's project id
+    Codex(InitCodexArgs),
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -189,6 +191,9 @@ pub enum ExportSource {
 
     /// Export chats from a Kiro `/chat save` JSON file
     Kiro(ExportKiroArgs),
+
+    /// Export Codex session files (*.jsonl) from ~/.codex/sessions
+    Codex(ExportCodexArgs),
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -269,6 +274,46 @@ pub struct ExportKiroArgs {
     pub offline: bool,
 }
 
+#[derive(Parser, Debug, Clone)]
+pub struct InitCodexArgs {
+    /// Optional centralized storage directory (defaults to OS local app data dir)
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+
+    /// Store initialized summaries inside the current directory (`./ContextPool/...`)
+    #[arg(long, conflicts_with = "out")]
+    pub local: bool,
+
+    /// Codex root directory (defaults to ~/.codex or $CODEX_HOME)
+    #[arg(long)]
+    pub codex_dir: Option<PathBuf>,
+
+    /// Space-separated Codex session ids (typically the UUID from the rollout file name)
+    ///
+    /// Example: `cxp init codex 019d913e-f595-7af0-9004-fb8335509f30`
+    #[arg(required = false)]
+    pub session_ids: Vec<String>,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct ExportCodexArgs {
+    /// Optional output directory (defaults to app data dir)
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+
+    /// Codex root directory (defaults to ~/.codex or $CODEX_HOME)
+    #[arg(long)]
+    pub codex_dir: Option<PathBuf>,
+
+    /// Export a single Codex session file (.jsonl) instead of scanning all sessions
+    #[arg(long)]
+    pub session: Option<PathBuf>,
+
+    /// Do not call remote API; store a local fallback summary
+    #[arg(long)]
+    pub offline: bool,
+}
+
 #[derive(Parser, Debug)]
 pub struct InstallArgs {
     /// Path to the cxp binary to register (defaults to the current executable)
@@ -294,6 +339,10 @@ pub struct InstallArgs {
     /// Skip updating Cursor config
     #[arg(long)]
     pub skip_cursor: bool,
+
+    /// Skip updating Codex config
+    #[arg(long)]
+    pub skip_codex: bool,
 
     /// Skip the LLM backend setup wizard
     #[arg(long)]
