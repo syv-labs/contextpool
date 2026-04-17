@@ -10,12 +10,17 @@ use std::{fs, io::{self, Write}, path::{Path, PathBuf}};
 
 pub async fn export_kiro(args: ExportKiroArgs) -> Result<()> {
     let out_dir = args.out.unwrap_or_else(|| default_out_dir());
-    
+
     if args.scan {                                                                                                                       
-      let kiro_dir = args.kiro_dir.or_else(|| default_kiro_dir()).context("Could not determine Kiro directory")?;                                                                             
+      let kiro_dir = args.kiro_dir.or_else(|| default_kiro_dir()).context("Could not determine Kiro directory")?;     
+
+      fs::create_dir_all(&out_dir)?;
+      let export_base = out_dir.join("exports").join("kiro"); 
+      fs::create_dir_all(&export_base)?;
+
       let cwd = std::env::current_dir()?;                                                                                              
-      let count = export_kiro_project_sessions(&kiro_dir, &cwd, &[], &out_dir, args.offline).await?;                                   
-      println!("Exported {} Kiro session(s)", count);                                                                                  
+      let count = export_kiro_project_sessions(&kiro_dir, &cwd, &[], &export_base, args.offline).await?;                                   
+      println!("Exported {} Kiro session(s) to {}", count, export_base.display());                                                                                  
       return Ok(());                                                                                                                   
     }
     fs::create_dir_all(&out_dir).with_context(|| format!("Creating {}", out_dir.display()))?;
