@@ -1,21 +1,24 @@
+mod aggregate;
 mod cli;
 mod cloud;
 mod credentials;
 mod embedded_agent;
 mod export;
 mod init;
+mod insight_filter;
 mod install_cmd;
 mod mcp;
 mod paths;
 mod project;
 mod redact;
+mod scope;
 mod summarize;
 mod team;
 mod transcript;
 
 use anyhow::Result;
 use clap::Parser;
-use cli::{Cli, Command, ExportSource, InitSource, McpArgs};
+use cli::{Cli, Command, ExportSource, InitSource, McpArgs, ScopeAction};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -44,6 +47,12 @@ async fn main() -> Result<()> {
         Command::Push(args) => team::cmd_push(args).await,
         Command::Pull(args) => team::cmd_pull(args).await,
         Command::Team(args) => team::cmd_team(args).await,
+        Command::Scope(args) => match args.action {
+            Some(ScopeAction::List) => scope::cmd_list_scopes().await,
+            Some(ScopeAction::Info { scope_id }) => scope::cmd_scope_info(&scope_id).await,
+            None => scope::cmd_list_scopes().await,
+        },
+        Command::Aggregate(args) => scope::cmd_aggregate(args).await,
         Command::Install(args) => install_cmd::cmd_install(args).map_err(Into::into),
     }
 }

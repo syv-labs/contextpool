@@ -35,6 +35,12 @@ pub enum Command {
     /// Show team info and projects
     Team(TeamArgs),
 
+    /// Manage memory scopes (project-specific vs inter-project)
+    Scope(ScopeArgs),
+
+    /// Manually trigger inter-project memory aggregation
+    Aggregate(AggregateArgs),
+
     /// Register the contextpool MCP server with Claude Code and Cursor
     Install(InstallArgs),
 }
@@ -370,5 +376,38 @@ pub struct InstallArgs {
     /// Run only the LLM backend setup wizard (skip MCP registration)
     #[arg(long, conflicts_with_all = ["skip_claude", "skip_cursor", "skip_setup"])]
     pub setup: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct ScopeArgs {
+    #[command(subcommand)]
+    pub action: Option<ScopeAction>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ScopeAction {
+    /// List all available scopes
+    List,
+
+    /// Show details about a specific scope
+    Info {
+        /// Scope ID (e.g., 'github.com-org-repo' or '@interproject')
+        scope_id: String,
+    },
+}
+
+#[derive(Parser, Debug)]
+pub struct AggregateArgs {
+    /// Re-aggregate all projects even if they were recently processed
+    #[arg(long)]
+    pub force: bool,
+
+    /// Only aggregate a specific project
+    #[arg(long)]
+    pub project: Option<String>,
+
+    /// Data directory (defaults to OS local app data dir)
+    #[arg(long)]
+    pub data_dir: Option<PathBuf>,
 }
 

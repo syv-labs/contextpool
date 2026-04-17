@@ -65,6 +65,13 @@ TAGS REQUIREMENTS:
 - Use specific tags (e.g. "tokio-runtime", "lifetime-borrow") not generic ones (e.g. "rust", "error")
 - Include both broad category tags and narrow specific tags
 
+RELEVANCE SCORING:
+- Assign a relevance_score (0.0-1.0) to each insight for cross-project usefulness
+- 1.0 (high): Architecture decisions, design patterns, root-cause fixes, reusable solutions, framework gotchas
+- 0.6 (moderate): Bug fixes with clear root causes, library-specific insights, decision rationales
+- 0.3 (low): Quick workarounds, one-off fixes, debug helpers, project-specific hacks
+- 0.0 (skip): Typos, trivial tweaks, minor adjustments
+
 EXAMPLE (shape only; content will differ):
 [
   {
@@ -72,7 +79,8 @@ EXAMPLE (shape only; content will differ):
     "title": "Fix ESM vs CJS mismatch",
     "summary": "Add \"type\": \"module\" with NodeNext to resolve verbatimModuleSyntax import/export errors.",
     "tags": ["typescript", "esm", "commonjs", "tsconfig", "module-resolution", "nodejs", "verbatimModuleSyntax", "import-export"],
-    "file": "client.ts"
+    "file": "client.ts",
+    "relevance_score": 0.8
   }
 ]
 "#;
@@ -233,7 +241,7 @@ struct AnthropicContentBlock {
     text: Option<String>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct ContextItem {
     #[serde(default, rename = "type")]
     pub r#type: String,
@@ -245,6 +253,16 @@ pub struct ContextItem {
     pub tags: Vec<String>,
     #[serde(default)]
     pub file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_project_id: Option<String>,
+    #[serde(default = "default_relevance_score")]
+    pub relevance_score: f32,
+}
+
+fn default_relevance_score() -> f32 {
+    0.5  // Moderate relevance if not provided
 }
 
 pub fn sanitize_chat_text(text: &str, extract_user_queries_only: bool) -> String {

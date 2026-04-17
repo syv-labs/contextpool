@@ -333,6 +333,18 @@ impl ContextPoolServer {
             }
         }
 
+        // ── Trigger inter-project aggregation ──
+        match crate::aggregate::aggregate_insights(&self.data_dir).await {
+            Ok(stats) => {
+                if stats.copied > 0 {
+                    sync_status.push_str(&format!("Aggregated {}. ", stats));
+                }
+            }
+            Err(e) => {
+                eprintln!("aggregation error: {e}");
+            }
+        }
+
         if !sync_status.is_empty() {
             result.push_str(&format!("\n\n{}", sync_status.trim()));
         }
@@ -366,20 +378,54 @@ impl ContextPoolServer {
     }
 
     fn search_context_impl(&self, query: &str, project_path: Option<String>) -> String {
-        let root = match project_path {
+        // Determine primary search scope (project-specific)
+        let project_root = match project_path {
             Some(p) => {
                 let path = PathBuf::from(&p);
                 let id = project_id_from_path(&path);
                 let local = project_dir(&path.join("ContextPool"), &id);
                 if local.exists() {
-                    local
+                    Some(local)
                 } else {
-                    project_dir(&self.data_dir, &id)
+                    let global = project_dir(&self.data_dir, &id);
+                    if global.exists() {
+                        Some(global)
+                    } else {
+                        None
+                    }
                 }
             }
-            None => self.data_dir.join("projects"),
+            None => None,
         };
-        search_summaries(&root, query)
+
+        // Search both project-specific and inter-project scopes
+        let mut all_results = Vec::new();
+
+        // Search project-specific scope if we have a specific project
+        if let Some(proj_root) = project_root {
+            all_results.extend(search_summaries_with_scope(&proj_root, query, "project"));
+        }
+
+        // Always include inter-project results from @interproject scope
+        let interproject_dir = self.data_dir.join("projects").join("@interproject");
+        if interproject_dir.exists() {
+            all_results.extend(search_summaries_with_scope(&interproject_dir, query, "interproject"));
+        }
+
+        // Format results
+        if all_results.is_empty() {
+            format!("No matches found for '{query}'.")
+        } else {
+            format!(
+                "Found {} match(es) for '{query}':\n\n{}",
+                all_results.len(),
+                all_results
+                    .iter()
+                    .map(|text| text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n\n")
+            )
+        }
     }
 
     fn list_projects_impl(&self) -> String {
@@ -1108,6 +1154,100 @@ fn extract_insight_blocks(content: &str) -> Vec<String> {
         blocks.push(block);
     }
     blocks
+}
+
+/// Search summaries in a specific scope and return results with scope attribution
+fn search_summaries_with_scope(root: &Path, query: &str, scope: &str) -> Vec<String> {
+    if query.trim().is_empty() {
+        return Vec::new();
+    }
+
+    let terms: Vec<String> = query
+        .to_lowercase()
+        .split_whitespace()
+        .map(String::from)
+        .collect();
+    if terms.is_empty() {
+        return Vec::new();
+    }
+
+    // (match_count, full_match, formatted_hit)
+    let mut hits: Vec<(usize, bool, String)> = Vec::new();
+
+    for entry in WalkDir::new(root).follow_links(false) {
+        let Ok(e) = entry else { continue };
+        if !e.file_type().is_file() {
+            continue;
+        }
+        if !e.file_name().to_str().unwrap_or("").ends_with(".summary.md") {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(e.path()) else {
+            continue;
+        };
+
+        let content_lower = content.to_lowercase();
+
+        // At least one term must appear; rank by how many terms match
+        let matched_terms = terms
+            .iter()
+            .filter(|t| content_lower.contains(t.as_str()))
+            .count();
+        if matched_terms == 0 {
+            continue;
+        }
+        let full_match = matched_terms == terms.len();
+
+        // Extract full insight blocks
+        let all_blocks = extract_insight_blocks(&content);
+        let matching_blocks: Vec<&str> = all_blocks
+            .iter()
+            .filter(|block| {
+                let lower = block.to_lowercase();
+                terms.iter().any(|t| lower.contains(t.as_str()))
+            })
+            .map(String::as_str)
+            .collect();
+
+        let id = e
+            .path()
+            .strip_prefix(root)
+            .unwrap_or(e.path())
+            .to_string_lossy()
+            .to_string();
+
+        let block_text = if matching_blocks.is_empty() {
+            content
+                .lines()
+                .filter(|l| {
+                    let lower = l.to_lowercase();
+                    terms.iter().any(|t| lower.contains(t.as_str()))
+                })
+                .take(5)
+                .map(|l| format!("  {}", l.trim()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            matching_blocks.join("\n")
+        };
+
+        let label = if full_match { "" } else { " *(partial)*" };
+        let scope_label = if scope == "interproject" {
+            " [from team memory]"
+        } else {
+            ""
+        };
+        hits.push((
+            matched_terms,
+            full_match,
+            format!("**{}**{}{}\\n{}", id, label, scope_label, block_text),
+        ));
+    }
+
+    // Full matches first, then by matched_terms descending
+    hits.sort_by(|a, b| b.1.cmp(&a.1).then(b.0.cmp(&a.0)));
+
+    hits.into_iter().map(|(_, _, text)| text).collect()
 }
 
 fn search_summaries(root: &Path, query: &str) -> String {
