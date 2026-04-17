@@ -23,7 +23,7 @@ use tokio::time::{timeout, Duration};
 
 use crate::{
     embedded_agent::{ContextItem, EmbeddedAgentOptions},
-    paths::default_out_dir,
+    paths::{default_out_dir, normalize_path_lexical},
     project::{project_dir, project_id_from_path},
     team,
 };
@@ -240,6 +240,8 @@ impl ContextPoolServer {
                     "Cursor"
                 } else if src.contains(".codex/") {
                     "Codex"
+                } else if src.contains(".kiro/") {
+                    "Kiro"
                 } else {
                     "Unknown"
                 };
@@ -396,7 +398,7 @@ impl ServerHandler for ContextPoolServer {
             },
             instructions: Some(
                 "ContextPool gives you persistent memory across sessions. \
-                 Summaries are stored locally from both Claude Code and Cursor sessions. \
+                 Summaries are stored locally from both Claude Code, Cursor, Kiro and Codex sessions. \
                  Follow these rules:\n\n\
                  INDEXING: IMMEDIATELY call fetch_project_context at the very start of every new \
                  conversation, before responding to the user's first message. It returns only a \
@@ -435,7 +437,7 @@ impl ServerHandler for ContextPoolServer {
             tools: vec![
                 Tool {
                     name: "fetch_project_context".into(),
-                    description: "Discover and summarize new Cursor, Claude Code, and Codex transcripts \
+                    description: "Discover and summarize new Cursor, Claude Code, Kiro, and Codex transcripts \
                          for this project. Stores summaries locally in <project>/ContextPool/. \
                          Returns only a session count and topic list — NOT the summaries themselves. \
                          Call this once per conversation to ensure indexing is current, then use \
@@ -632,22 +634,6 @@ impl ServerHandler for ContextPoolServer {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-/// Normalize a path lexically (resolve `.` and `..`) without filesystem access.
-/// Avoids macOS TCC permission prompts triggered by `canonicalize` on protected
-/// directories (Documents, Downloads, etc.).
-fn normalize_path_lexical(path: &Path) -> PathBuf {
-    use std::path::Component;
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => { out.pop(); }
-            c => out.push(c),
-        }
-    }
-    out
-}
-
 /// Write `content` to `path` atomically via a sibling `.tmp` file + rename.
 /// On POSIX, `rename(2)` is atomic: readers never see a partial write.
 fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
@@ -761,6 +747,11 @@ fn discover_new_transcripts(
         discover_codex_transcripts(&codex_dir, project_path, already_indexed, &mut new_files);
     }
 
+    // Kiro: ~/.kiro/sessions/cli/ (matched by cwd in companion .json metadata)
+      if let Some(kiro_dir) = crate::paths::default_kiro_dir() {
+          discover_kiro_transcripts(&kiro_dir, project_path, already_indexed, &mut new_files);
+      }
+
     new_files
 }
 
@@ -808,6 +799,58 @@ fn discover_codex_transcripts(
             }
         }
     }
+}
+
+/// Discover Kiro sessions whose `cwd` matches `project_path`.
+  ///
+  /// Kiro stores sessions in ~/.kiro/sessions/cli/ as paired <id>.json (metadata)
+  /// and <id>.jsonl (transcript) files. We read the .json file to check `cwd`.
+fn discover_kiro_transcripts(
+      kiro_dir: &Path,
+      project_path: &Path,
+      already_indexed: &HashSet<String>,
+      out: &mut Vec<PathBuf>,
+) {
+      let session_root = kiro_dir.join("sessions").join("cli");
+      if !session_root.exists() {
+          return;
+      }
+      let canonical_project = std::fs::canonicalize(project_path)
+          .unwrap_or_else(|_| normalize_path_lexical(project_path));
+      let lexical_project = normalize_path_lexical(project_path);
+
+      let Ok(entries) = std::fs::read_dir(&session_root) else { return };
+      for entry in entries {
+          let Ok(entry) = entry else { continue };
+          let path = entry.path();
+
+          // Only process .json metadata files
+          if path.extension().and_then(|e| e.to_str()) != Some("json") {
+              continue;
+          }
+
+          // The companion transcript is the .jsonl file
+          let jsonl_path = path.with_extension("jsonl");
+          if !jsonl_path.exists() {
+              continue;
+          }
+          let path_str = jsonl_path.to_string_lossy().to_string();
+          if already_indexed.contains(&path_str) {
+              continue;
+          }
+
+          // Read cwd from metadata
+          let Ok(raw) = std::fs::read_to_string(&path) else { continue };
+          let Ok(meta) = serde_json::from_str::<serde_json::Value>(&raw) else { continue };
+          let Some(session_cwd) = meta.get("cwd").and_then(|v| v.as_str()) else { continue };
+
+          let normalized_cwd = normalize_path_lexical(std::path::Path::new(session_cwd));
+          if normalized_cwd.starts_with(&canonical_project)
+              || normalized_cwd.starts_with(&lexical_project)
+          {
+              out.push(jsonl_path);
+          }
+      }
 }
 
 fn collect_jsonl_files(

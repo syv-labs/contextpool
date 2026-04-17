@@ -57,7 +57,7 @@ OUTPUT REQUIREMENTS:
 - Do not wrap the JSON in Markdown fences (no ```).
 - Each object must match this schema exactly: {type, title, summary, tags, file?}
 - Allowed keys per object: type, title, summary, tags, file. No other keys.
-- If you are about to output anything other than a JSON array of objects with the allowed keys, output [] instead.
+
 
 TAGS REQUIREMENTS:
 - Each insight MUST have 5-10 tags; add more if the insight warrants it
@@ -76,6 +76,9 @@ EXAMPLE (shape only; content will differ):
   }
 ]
 "#;
+
+// OUTPUT REQUIREMENTS: - If you are about to output anything other than a JSON array of objects with the allowed keys, output [] instead.
+
 
 fn user_prompt(chat_text: &str, files: &[String], repo_type: &str) -> String {
     let files_joined = if files.is_empty() {

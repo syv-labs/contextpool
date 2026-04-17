@@ -104,6 +104,9 @@ pub enum InitSource {
     /// Initialize memory from Claude Code for the current directory's project id
     ClaudeCode(InitClaudeCodeArgs),
 
+    /// Initialize memory from Kiro for the current directory's project id 
+    Kiro(InitKiroArgs),
+
     /// Initialize memory from Codex for the current directory's project id
     Codex(InitCodexArgs),
 }
@@ -148,6 +151,27 @@ pub struct InitCursorArgs {
     /// Example: `cxp init cursor 7b1e... 1a2b...`
     #[arg(required = false)]
     pub chat_ids: Vec<String>,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct InitKiroArgs {
+    /// Optional centralized storage directory (defaults to OS local app data dir)
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+
+    /// Store initialized summaries inside the current directory (`./ContextPool/...`)
+    #[arg(long, conflicts_with = "out")]
+    pub local: bool,
+
+    /// Kiro root directory (defaults to ~/.kiro)
+    #[arg(long)]
+    pub kiro_dir: Option<PathBuf>,
+
+    /// Space-separated Kiro session ids (typically session file names without `.jsonl`)
+    ///
+    /// Example: `cxp init kiro 7b1e... 1a2b...`
+    #[arg(required = false)]
+    pub session_ids: Vec<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -245,11 +269,20 @@ pub struct ExportKiroArgs {
 
     /// Path to a Kiro exported chat JSON file (from `/chat save <path>`).
     #[arg(long)]
-    pub chat_json: PathBuf,
+    pub chat_json: Option<PathBuf>,
 
     /// Do not call remote API; store a local fallback summary
     #[arg(long)]
     pub offline: bool,
+
+    /// Scan ~/.kiro/sessions/cli/ for all sessions matching the current directory                                                       
+    /// instead of providing a single --chat-json file                            
+    #[arg(long, conflicts_with = "chat_json")]                                                                                           
+    pub scan: bool,                           
+                                                                                                                                        
+    /// Kiro root directory for --scan mode (defaults to ~/.kiro)
+    #[arg(long)]                                                                                                                         
+    pub kiro_dir: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -306,6 +339,10 @@ pub struct InstallArgs {
     #[arg(long)]
     pub cursor_mcp: Option<PathBuf>,
 
+    /// Path to Kiro MCP config (defaults to ~/.kiro/settings/mcp.json)
+    #[arg(long)]
+    pub kiro_mcp: Option<PathBuf>,
+
     /// Overwrite an existing contextpool entry if one is already present
     #[arg(long)]
     pub force: bool,
@@ -321,6 +358,10 @@ pub struct InstallArgs {
     /// Skip updating Codex config
     #[arg(long)]
     pub skip_codex: bool,
+
+    /// Skip updating Kiro config
+    #[arg(long)]
+    pub skip_kiro: bool,
 
     /// Skip the LLM backend setup wizard
     #[arg(long)]

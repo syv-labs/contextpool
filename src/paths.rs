@@ -81,6 +81,23 @@ pub fn default_codex_dir() -> Option<PathBuf> {
     None
 }
 
+pub fn default_kiro_dir() -> Option<PathBuf> {
+    // Kiro stores conversations under ~/.kiro on all platforms.
+    let home = dirs::home_dir()?;
+    let candidate = home.join(".kiro");
+    
+    if candidate.join("sessions").exists() {
+        return Some(candidate);
+    }
+    
+    // Return the path even if sessions/ doesn't exist yet so callers can report a useful error.
+    if candidate.exists() {
+        return Some(candidate);
+    }
+    
+    None
+}
+
 pub fn default_workspace_storage_dir(product: &str) -> Option<PathBuf> {
     let product = if product.trim().is_empty() {
         "Cursor"
@@ -162,3 +179,15 @@ pub fn default_workspace_storage_dir(product: &str) -> Option<PathBuf> {
     None
 }
 
+pub fn normalize_path_lexical(path: &std::path::Path) -> std::path::PathBuf {                                                 
+      use std::path::Component;                                                                                                        
+      let mut out = std::path::PathBuf::new();                                                                                         
+      for component in path.components() {                                                                                             
+          match component {               
+              Component::CurDir => {}                                                                                                  
+              Component::ParentDir => { out.pop(); }
+              c => out.push(c),                                                                                                        
+          }                    
+      }                                                                                                                                
+      out                 
+}    
