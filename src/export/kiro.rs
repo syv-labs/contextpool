@@ -56,6 +56,7 @@ pub async fn export_kiro_project_sessions(
     cwd: &Path,
     session_ids: &[String],
     out_dir: &Path,
+    offline: bool,
 ) -> Result<usize> {
     let session_root = kiro_dir.join("sessions").join("cli");
     if !session_root.exists() {
@@ -111,26 +112,31 @@ pub async fn export_kiro_project_sessions(
         let raw = fs::read_to_string(path).with_context(|| format!("Reading {}", path.display()))?;
         let extracted = extract_text_from_jsonl(&raw);
 
-        let summary = match summarize_embedded(&extracted)
-            .await
-            .with_context(|| format!("Summarization failed for {}", path.display()))?
-        {
-            Some(s) => {
-                let count = s.lines().filter(|l| l.trim().starts_with("- **")).count();
-                eprintln!("{} insight(s)", count);
-                for line in s.lines() {
-                    let t = line.trim();
-                    if t.starts_with("- **") {
-                        eprintln!("      {}", t);
-                    }
-                }
-                s
-            }
-            None => {
-                eprintln!("no insights");
-                continue; // no insights — skip file
-            }
-        };
+        let summary = if offline {
+              eprintln!("offline");
+              fallback_summary(&extracted)
+          } else {
+              match summarize_embedded(&extracted)
+                  .await
+                  .with_context(|| format!("Summarization failed for {}", path.display()))?
+              {
+                  Some(s) => {
+                      let count = s.lines().filter(|l| l.trim().starts_with("- **")).count();
+                      eprintln!("{} insight(s)", count);
+                      for line in s.lines() {
+                          let t = line.trim();
+                          if t.starts_with("- **") {
+                              eprintln!("      {}", t);
+                          }
+                      }
+                      s
+                  }
+                  None => {
+                      eprintln!("no insights");
+                      continue;
+                  }
+              }
+          };
 
         let safe_name = path
             .file_stem()
@@ -160,48 +166,66 @@ pub async fn export_kiro_project_sessions(
     Ok(index.len())
 }
 
+fn normalize_path_lexical(path: &Path) -> PathBuf {                                                                                  
+      use std::path::Component;                                                                                                        
+      let mut out = PathBuf::new();
+      for component in path.components() {                                                                                             
+          match component {                                                                                                            
+              Component::CurDir => {}
+              Component::ParentDir => { out.pop(); }                                                                                   
+              c => out.push(c),
+          }                                                                                                                            
+      }
+      out                                                                                                                              
+}    
+
 fn discover_kiro_sessions_under(session_root: &Path, cwd: &Path) -> Result<Vec<PathBuf>> {                                           
       if !session_root.exists() {                                                                                                      
           return Ok(vec![]);                                                                                                           
       }                                                                                                                                
                                                                                                                                        
-      let cwd_str = cwd.to_string_lossy();                                                                                             
+      let canonical_project = std::fs::canonicalize(cwd)  .unwrap_or_else(|_| normalize_path_lexical(cwd));
+      let lexical_project = normalize_path_lexical(cwd);                                                                               
+                  
       let mut found = Vec::new();                                                                                                      
-                                                                                                                                       
-      for entry in std::fs::read_dir(session_root)? {
-          let entry = entry?;                                                                                                          
-          let path = entry.path();                                                                                                   
-
+   
+      for entry in std::fs::read_dir(session_root)? {                                                                                  
+          let entry = entry?;
+          let path = entry.path();                                                                                                     
+   
           // Only look at .json metadata files (not .jsonl or .lock)                                                                   
           if path.extension().and_then(|e| e.to_str()) != Some("json") {
               continue;                                                                                                                
-          }                                                                                                                          
-
+          }                                                                                                                            
+   
           // Parse the metadata to check the cwd                                                                                       
           let raw = match std::fs::read_to_string(&path) {
               Ok(s) => s,                                                                                                              
-              Err(_) => continue,                                                                                                    
-          };                                                                                                                           
-          let meta: serde_json::Value = match serde_json::from_str(&raw) {                                                           
-              Ok(v) => v,                                                                                                              
               Err(_) => continue,
           };                                                                                                                           
-                                                                                                                                     
+          let meta: serde_json::Value = match serde_json::from_str(&raw) {                                                             
+              Ok(v) => v,
+              Err(_) => continue,                                                                                                      
+          };                                                                                                                           
+   
           let session_cwd = match meta.get("cwd").and_then(|v| v.as_str()) {                                                           
               Some(s) => s.to_string(),
               None => continue,                                                                                                        
-          };                                                                                                                         
+          };
+                                                                                                                                       
+          let normalized_cwd = normalize_path_lexical(std::path::Path::new(&session_cwd));
+          if !normalized_cwd.starts_with(&canonical_project)
+              && !normalized_cwd.starts_with(&lexical_project)                                                                         
+          {
+              continue;                                                                                                                
+          }       
 
-          if session_cwd != cwd_str.as_ref() {                                                                                         
-              continue;
-          }                                                                                                                            
-                                                                                                                                     
           // Found a matching session — add the companion .jsonl                                                                       
           let jsonl_path = path.with_extension("jsonl");
           if jsonl_path.exists() {                                                                                                     
-              found.push(jsonl_path);                                                                                                  
-          }
-      }                                                                                                                                
+              found.push(jsonl_path);
+          }                                                                                                                            
+      }                                                                                                                                 
                                                                                                                                      
       found.sort();
       Ok(found)

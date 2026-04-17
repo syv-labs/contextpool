@@ -188,6 +188,7 @@ pub async fn init_kiro(args: InitKiroArgs) -> Result<()> {
         &cwd, 
         &args.session_ids,
         &run_dir,
+        false,
     )
     .await?;
 

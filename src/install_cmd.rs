@@ -70,6 +70,14 @@ fn default_codex_config_toml() -> PathBuf {
         .join("config.toml")
 }
 
+fn default_kiro_json() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".kiro")
+        .join("settings")
+        .join("mcp.json")
+}
+
 fn configure_codex(config_toml: &Path, binary_path: &str, force: bool) -> Result<bool> {
     // Read or create the TOML document.
     let raw = if config_toml.exists() {
@@ -137,6 +145,31 @@ fn configure_cursor(cursor_mcp: &Path, binary_path: &str, force: bool) -> Result
         serde_json::json!({ "command": binary_path, "args": ["mcp"] }),
     );
     atomic_write(cursor_mcp, &serde_json::to_string_pretty(&root)?)?;
+    Ok(true)
+}
+
+fn configure_kiro(kiro_json: &Path, binary_path: &str, force: bool) -> Result<bool> {
+    let mut root = read_json_or_empty(kiro_json)?;
+    
+    // Ensure the mcpServers object exists
+    if !root.get("mcpServers").map(|v| v.is_object()).unwrap_or(false) {
+        root["mcpServers"] = serde_json::json!({});
+    }
+    
+    let servers = root["mcpServers"].as_object_mut().unwrap();
+    
+    // Check if contextpool is already configured
+    if servers.contains_key("contextpool") && !force {
+        return Ok(false);
+    }
+    
+    // Insert the contextpool MCP server configuration
+    servers.insert(
+        "contextpool".to_string(),
+        serde_json::json!({ "command": binary_path, "args": ["mcp"] }),
+    );
+    
+    atomic_write(kiro_json, &serde_json::to_string_pretty(&root)?)?;
     Ok(true)
 }
 
@@ -331,6 +364,15 @@ pub fn cmd_install(args: InstallArgs) -> Result<()> {
             Ok(false) => { println!("  Codex — contextpool already in {} (use --force to overwrite)", codex_config.display()); }
             Err(e)    => { eprintln!("✗ Codex — failed to update {}: {e}", codex_config.display()); }
         }
+    }
+
+    if !args.skip_kiro {
+          let kiro_mcp = args.kiro_mcp.unwrap_or_else(default_kiro_json);
+          match configure_kiro(&kiro_mcp, &binary_path, force) {
+              Ok(true)  => { println!("✓ Kiro — added contextpool to {}", kiro_mcp.display()); configured_any = true; }
+              Ok(false) => { println!("  Kiro — contextpool already in {} (use --force to overwrite)", kiro_mcp.display()); }
+              Err(e)    => { eprintln!("✗ Kiro — failed to update {}: {e}", kiro_mcp.display()); }
+          }
     }
 
     if configured_any {

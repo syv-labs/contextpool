@@ -104,7 +104,9 @@ pub enum InitSource {
     /// Initialize memory from Claude Code for the current directory's project id
     ClaudeCode(InitClaudeCodeArgs),
 
+    /// Initialize memory from Kiro for the current directory's project id 
     Kiro(InitKiroArgs),
+
     /// Initialize memory from Codex for the current directory's project id
     Codex(InitCodexArgs),
 }
@@ -328,6 +330,10 @@ pub struct InstallArgs {
     #[arg(long)]
     pub cursor_mcp: Option<PathBuf>,
 
+    /// Path to Kiro MCP config (defaults to ~/.kiro/settings/mcp.json)
+    #[arg(long)]
+    pub kiro_mcp: Option<PathBuf>,
+
     /// Overwrite an existing contextpool entry if one is already present
     #[arg(long)]
     pub force: bool,
@@ -343,6 +349,10 @@ pub struct InstallArgs {
     /// Skip updating Codex config
     #[arg(long)]
     pub skip_codex: bool,
+
+    /// Skip updating Kiro config
+    #[arg(long)]
+    pub skip_kiro: bool,
 
     /// Skip the LLM backend setup wizard
     #[arg(long)]
