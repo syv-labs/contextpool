@@ -25,6 +25,9 @@ pub fn extract_text_from_jsonl(jsonl: &str) -> String {
         } else if let Some(text) = try_cursor(&v) {
             out.push_str(&text);
         }
+        else if let Some(text) = try_kiro(&v) {
+            out.push_str(&text);
+        }
         // Unknown format: skip entirely rather than dumping raw JSON noise
 
         // Cap to prevent memory issues with very large sessions
@@ -130,6 +133,52 @@ fn try_cursor(v: &serde_json::Value) -> Option<String> {
     if text.is_empty() {
         return Some(String::new());
     }
+
+    Some(format!("{role}: {text}\n\n"))
+}
+
+/// Kiro JSONL line: top-level `kind` is "Prompt" or "AssistantMessage".
+/// `data` is an object with a `content` array of `{kind, data}` blocks.
+/// We extract the "text" kinds and ignore "ToolResults", "toolUse", etc.
+fn try_kiro(v: &serde_json::Value) -> Option<String> {
+    let kind = v.get("kind")?.as_str()?;
+    
+    let role = match kind {
+        "Prompt" => "User",
+        "AssistantMessage" => "Assistant",
+        // Silently swallow other events like "ToolResults"
+        _ => return Some(String::new()), 
+    };
+
+    let data = v.get("data")?;
+    let content = data.get("content")?;
+
+    let text = match content {
+        serde_json::Value::Array(blocks) => {
+            let mut parts: Vec<&str> = Vec::new();
+            for block in blocks {
+                let block_kind = block.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+                match block_kind {
+                    // Keep only plain text blocks, the text itself is stored in `data`
+                    "text" => {
+                        if let Some(t) = block.get("data").and_then(|d| d.as_str()) {
+                            let t = t.trim();
+                            if !t.is_empty() {
+                                parts.push(t);
+                            }
+                        }
+                    }
+                    // Drop everything else: toolUse, toolResult, etc.
+                    _ => {}
+                }
+            }
+            if parts.is_empty() { 
+                return Some(String::new()); 
+            }
+            parts.join("\n")
+        }
+        _ => return Some(String::new()),
+    };
 
     Some(format!("{role}: {text}\n\n"))
 }

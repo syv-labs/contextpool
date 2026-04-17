@@ -29,6 +29,7 @@ async fn main() -> Result<()> {
         Command::Init(args) => match args.source {
             InitSource::Cursor(args) => init::init_cursor(args).await,
             InitSource::ClaudeCode(args) => init::init_claude_code(args).await,
+            InitSource::Kiro(args) => init::init_kiro(args).await
         },
         Command::Export(args) => match args.source {
             ExportSource::Cursor(args) => export::cursor::export_cursor(args).await,

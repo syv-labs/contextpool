@@ -103,6 +103,8 @@ pub enum InitSource {
 
     /// Initialize memory from Claude Code for the current directory's project id
     ClaudeCode(InitClaudeCodeArgs),
+
+    Kiro(InitKiroArgs),
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -145,6 +147,27 @@ pub struct InitCursorArgs {
     /// Example: `cxp init cursor 7b1e... 1a2b...`
     #[arg(required = false)]
     pub chat_ids: Vec<String>,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct InitKiroArgs {
+    /// Optional centralized storage directory (defaults to OS local app data dir)
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+
+    /// Store initialized summaries inside the current directory (`./ContextPool/...`)
+    #[arg(long, conflicts_with = "out")]
+    pub local: bool,
+
+    /// Kiro root directory (defaults to ~/.kiro)
+    #[arg(long)]
+    pub kiro_dir: Option<PathBuf>,
+
+    /// Space-separated Kiro session ids (typically session file names without `.jsonl`)
+    ///
+    /// Example: `cxp init kiro 7b1e... 1a2b...`
+    #[arg(required = false)]
+    pub session_ids: Vec<String>,
 }
 
 #[derive(Parser, Debug)]

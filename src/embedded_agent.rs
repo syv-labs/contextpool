@@ -57,7 +57,7 @@ OUTPUT REQUIREMENTS:
 - Do not wrap the JSON in Markdown fences (no ```).
 - Each object must match this schema exactly: {type, title, summary, tags, file?}
 - Allowed keys per object: type, title, summary, tags, file. No other keys.
-- If you are about to output anything other than a JSON array of objects with the allowed keys, output [] instead.
+
 
 TAGS REQUIREMENTS:
 - Each insight MUST have 5-10 tags; add more if the insight warrants it
@@ -76,6 +76,9 @@ EXAMPLE (shape only; content will differ):
   }
 ]
 "#;
+
+// OUTPUT REQUIREMENTS: - If you are about to output anything other than a JSON array of objects with the allowed keys, output [] instead.
+
 
 fn user_prompt(chat_text: &str, files: &[String], repo_type: &str) -> String {
     let files_joined = if files.is_empty() {
@@ -593,20 +596,44 @@ async fn call_openai_chat(
 
 async fn call_claude_cli(system: &str, user: &str) -> Result<String> {
     let combined = format!("{}\n\n{}", system.trim(), user.trim());
-    let output = tokio::process::Command::new("claude")
-        .arg("-p")
-        .arg(&combined)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .await
-        .context("Failed to spawn `claude` CLI")?;
+    // let output = tokio::process::Command::new("claude")
+    //     .arg("-p")
+    //     .arg(&combined)
+    //     .stdin(std::process::Stdio::null())
+    //     .output()
+    //     .await
+    //     .context("Failed to spawn `claude` CLI")?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("`claude -p` exited with {}: {}", output.status, stderr);
-    }
+    // if !output.status.success() {
+    //     let stderr = String::from_utf8_lossy(&output.stderr);
+    //     anyhow::bail!("`claude -p` exited with {}: {}", output.status, stderr);
+    // }
 
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    // Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+
+    let mut child = tokio::process::Command::new("claude")                                                                           
+          .arg("-p")
+          .arg(system.trim())                                                                                                          
+          .stdin(std::process::Stdio::piped())
+          .stdout(std::process::Stdio::piped())                                                                                        
+          .stderr(std::process::Stdio::piped())
+          .spawn()                                                                                                                     
+          .context("Failed to spawn `claude` CLI")?;
+
+        if let Some(mut stdin) = child.stdin.take() {
+          use tokio::io::AsyncWriteExt;                                                                                                
+          stdin.write_all(user.trim().as_bytes()).await?;                                                                              
+      }
+                                                                                                                                       
+      let output = child.wait_with_output().await
+          .context("Failed to wait for `claude` CLI")?;
+                                                                                                                                       
+      if !output.status.success() {
+          let stderr = String::from_utf8_lossy(&output.stderr);                                                                        
+          anyhow::bail!("`claude -p` exited with {}: {}", output.status, stderr);
+      }                                                                                                                                
+   
+      Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 pub async fn generate_context_items(
