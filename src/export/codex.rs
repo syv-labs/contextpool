@@ -1,6 +1,6 @@
 use crate::{
     cli::ExportCodexArgs,
-    paths::{default_codex_dir, default_out_dir},
+    paths::{default_codex_dir, default_out_dir, normalize_path_lexical},
     summarize::{fallback_summary, summarize_embedded},
     transcript::{extract_codex_cwd, extract_text_from_jsonl},
 };
@@ -223,24 +223,6 @@ pub fn discover_all_codex_sessions(codex_dir: &Path) -> Result<Vec<PathBuf>> {
     found.sort();
     found.dedup();
     Ok(found)
-}
-
-/// Normalize a path lexically (resolve `.` and `..` components) without any
-/// filesystem access, avoiding macOS TCC permission prompts for protected
-/// directories (Documents, Downloads, etc.).
-fn normalize_path_lexical(path: &Path) -> PathBuf {
-    use std::path::Component;
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            c => out.push(c),
-        }
-    }
-    out
 }
 
 /// Discover Codex sessions whose `cwd` matches (or is a child of) `project_path`.

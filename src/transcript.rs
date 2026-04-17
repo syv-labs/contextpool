@@ -220,6 +220,9 @@ pub fn extract_codex_cwd(path: &std::path::Path) -> Option<String> {
 /// `data` is an object with a `content` array of `{kind, data}` blocks.
 /// We extract the "text" kinds and ignore "ToolResults", "toolUse", etc.
 fn try_kiro(v: &serde_json::Value) -> Option<String> {
+    if v.get("data").is_none() {                                                                                                     
+        return None;                                                                                                                 
+    }
     let kind = v.get("kind")?.as_str()?;
     
     let role = match kind {

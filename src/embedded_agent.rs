@@ -599,6 +599,8 @@ async fn call_claude_cli(system: &str, user: &str, model: &str) -> Result<String
     let output = tokio::process::Command::new("claude")
         .arg("-p")
         .arg(&combined)
+        .arg("--model")
+        .arg(model)
         .stdin(std::process::Stdio::null())
         .output()
         .await

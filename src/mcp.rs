@@ -23,7 +23,7 @@ use tokio::time::{timeout, Duration};
 
 use crate::{
     embedded_agent::{ContextItem, EmbeddedAgentOptions},
-    paths::default_out_dir,
+    paths::{default_out_dir, normalize_path_lexical},
     project::{project_dir, project_id_from_path},
     team,
 };
@@ -240,6 +240,8 @@ impl ContextPoolServer {
                     "Cursor"
                 } else if src.contains(".codex/") {
                     "Codex"
+                } else if src.contains(".kiro/") {
+                    "Kiro"
                 } else {
                     "Unknown"
                 };
@@ -396,7 +398,7 @@ impl ServerHandler for ContextPoolServer {
             },
             instructions: Some(
                 "ContextPool gives you persistent memory across sessions. \
-                 Summaries are stored locally from both Claude Code and Cursor sessions. \
+                 Summaries are stored locally from both Claude Code, Cursor, Kiro and Codex sessions. \
                  Follow these rules:\n\n\
                  INDEXING: IMMEDIATELY call fetch_project_context at the very start of every new \
                  conversation, before responding to the user's first message. It returns only a \
@@ -435,7 +437,7 @@ impl ServerHandler for ContextPoolServer {
             tools: vec![
                 Tool {
                     name: "fetch_project_context".into(),
-                    description: "Discover and summarize new Cursor, Claude Code, and Codex transcripts \
+                    description: "Discover and summarize new Cursor, Claude Code, Kiro, and Codex transcripts \
                          for this project. Stores summaries locally in <project>/ContextPool/. \
                          Returns only a session count and topic list — NOT the summaries themselves. \
                          Call this once per conversation to ensure indexing is current, then use \
@@ -631,22 +633,6 @@ impl ServerHandler for ContextPoolServer {
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-/// Normalize a path lexically (resolve `.` and `..`) without filesystem access.
-/// Avoids macOS TCC permission prompts triggered by `canonicalize` on protected
-/// directories (Documents, Downloads, etc.).
-fn normalize_path_lexical(path: &Path) -> PathBuf {
-    use std::path::Component;
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => { out.pop(); }
-            c => out.push(c),
-        }
-    }
-    out
-}
 
 /// Write `content` to `path` atomically via a sibling `.tmp` file + rename.
 /// On POSIX, `rename(2)` is atomic: readers never see a partial write.

@@ -1,8 +1,8 @@
 use crate::{
     cli::ExportKiroArgs,
-    paths::default_out_dir,
+    paths::{default_kiro_dir, default_out_dir, normalize_path_lexical},
     summarize::{fallback_summary, summarize_embedded},
-    transcript::{extract_text_from_jsonl},
+    transcript::extract_text_from_jsonl,
 };
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
@@ -10,13 +10,21 @@ use std::{fs, io::{self, Write}, path::{Path, PathBuf}};
 
 pub async fn export_kiro(args: ExportKiroArgs) -> Result<()> {
     let out_dir = args.out.unwrap_or_else(|| default_out_dir());
+    
+    if args.scan {                                                                                                                       
+      let kiro_dir = args.kiro_dir.or_else(|| default_kiro_dir()).context("Could not determine Kiro directory")?;                                                                             
+      let cwd = std::env::current_dir()?;                                                                                              
+      let count = export_kiro_project_sessions(&kiro_dir, &cwd, &[], &out_dir, args.offline).await?;                                   
+      println!("Exported {} Kiro session(s)", count);                                                                                  
+      return Ok(());                                                                                                                   
+    }
     fs::create_dir_all(&out_dir).with_context(|| format!("Creating {}", out_dir.display()))?;
 
     let run_id = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let run_dir = out_dir.join("exports").join("kiro").join(run_id.replace(':', "-"));
     fs::create_dir_all(&run_dir).with_context(|| format!("Creating {}", run_dir.display()))?;
 
-    let src = args.chat_json;
+    let src = args.chat_json.context("--chat-json is required when not using --scan")?;
     let raw = fs::read_to_string(&src).with_context(|| format!("Reading {}", src.display()))?;
     let extracted = extract_text_from_jsonl(&raw);
 
@@ -164,19 +172,6 @@ pub async fn export_kiro_project_sessions(
     let index_path = run_dir.join("index.json");
     fs::write(&index_path, serde_json::to_string_pretty(&index)?)?;
     Ok(index.len())
-}
-
-fn normalize_path_lexical(path: &Path) -> PathBuf {                                                                                  
-      use std::path::Component;                                                                                                        
-      let mut out = PathBuf::new();
-      for component in path.components() {                                                                                             
-          match component {                                                                                                            
-              Component::CurDir => {}
-              Component::ParentDir => { out.pop(); }                                                                                   
-              c => out.push(c),
-          }                                                                                                                            
-      }
-      out                                                                                                                              
 }    
 
 fn discover_kiro_sessions_under(session_root: &Path, cwd: &Path) -> Result<Vec<PathBuf>> {                                           

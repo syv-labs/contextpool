@@ -269,11 +269,20 @@ pub struct ExportKiroArgs {
 
     /// Path to a Kiro exported chat JSON file (from `/chat save <path>`).
     #[arg(long)]
-    pub chat_json: PathBuf,
+    pub chat_json: Option<PathBuf>,
 
     /// Do not call remote API; store a local fallback summary
     #[arg(long)]
     pub offline: bool,
+
+    /// Scan ~/.kiro/sessions/cli/ for all sessions matching the current directory                                                       
+    /// instead of providing a single --chat-json file                            
+    #[arg(long, conflicts_with = "chat_json")]                                                                                           
+    pub scan: bool,                           
+                                                                                                                                        
+    /// Kiro root directory for --scan mode (defaults to ~/.kiro)
+    #[arg(long)]                                                                                                                         
+    pub kiro_dir: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug, Clone)]

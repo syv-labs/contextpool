@@ -179,3 +179,15 @@ pub fn default_workspace_storage_dir(product: &str) -> Option<PathBuf> {
     None
 }
 
+pub fn normalize_path_lexical(path: &std::path::Path) -> std::path::PathBuf {                                                 
+      use std::path::Component;                                                                                                        
+      let mut out = std::path::PathBuf::new();                                                                                         
+      for component in path.components() {                                                                                             
+          match component {               
+              Component::CurDir => {}                                                                                                  
+              Component::ParentDir => { out.pop(); }
+              c => out.push(c),                                                                                                        
+          }                    
+      }                                                                                                                                
+      out                 
+}    
